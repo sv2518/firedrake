@@ -1,5 +1,5 @@
 import numpy
-from functools import partial
+from functools import partial, singledispatch
 
 import FIAT
 import ufl
@@ -7,8 +7,11 @@ from ufl.algorithms import extract_arguments
 
 from pyop2 import op2
 
-from tsfc.finatinterface import create_base_element
+from tsfc.finatinterface import create_base_element, as_fiat_cell
 from tsfc import compile_expression_dual_evaluation
+
+import gem
+import finat
 
 import firedrake
 from firedrake import utils
@@ -166,10 +169,14 @@ def make_interpolator(expr, V, subset, access):
     elif len(arguments) == 1:
         if isinstance(V, firedrake.Function):
             raise ValueError("Cannot interpolate an expression with an argument into a Function")
-
         argfs = arguments[0].function_space()
+        argfs_map = argfs.cell_node_map()
+        if argfs_map is None or argfs_map.iterset != V.cell_node_map().iterset:
+            if isinstance(V.ufl_domain().topology, firedrake.mesh.VertexOnlyMeshTopology):
+                # Compose a vertex-cell to parent-cell-function-space-node map
+                argfs_map = compose_map_and_cache(V.ufl_domain().cell_parent_cell_map, argfs_map)
         sparsity = op2.Sparsity((V.dof_dset, argfs.dof_dset),
-                                ((V.cell_node_map(), argfs.cell_node_map()),),
+                                ((V.cell_node_map(), argfs_map),),
                                 name="%s_%s_sparsity" % (V.name, argfs.name),
                                 nest=False,
                                 block_sparse=True)
@@ -227,17 +234,43 @@ def _interpolator(V, tensor, expr, subset, arguments, access):
         raise RuntimeError('Shape mismatch: Expression shape %r, FunctionSpace shape %r'
                            % (expr.ufl_shape, V.ufl_element().value_shape()))
 
-    mesh = V.ufl_domain()
-    coords = mesh.coordinates
+    target_mesh = V.ufl_domain()
+    try:
+        trans_mesh = (
+            expr.ufl_domain() is not None  # Constant expr
+            and expr.ufl_domain() != V.mesh()  # Coming from a different domain
+            and isinstance(target_mesh.topology,  # Target domain is the one we support
+                           firedrake.mesh.VertexOnlyMeshTopology)
+        )
+    except AttributeError:
+        # Have python Expression
+        trans_mesh = False
+
+    if trans_mesh:
+        if target_mesh.geometric_dimension() != expr.ufl_domain().geometric_dimension():
+            raise ValueError("Cannot interpolate onto a VertexOnlyMesh of a different geometric dimension")
+        # For trans-mesh interpolation we use a FInAT QuadratureElement as the
+        # (base) target element with runtime point set expressions as their
+        # quadrature rule point set and appropriate weights
+        to_element = rebuild(to_element, expr)
+        # The source domain is on the expression not the FunctionSpace/Function
+        # we are interpolating into/onto
+        source_coords_coeff = expr.ufl_domain().coordinates
+        source_domain = expr.ufl_domain()
+    else:
+        # The source domain is that of the FunctionSpace/Function we are
+        # interpolating into/onto
+        source_coords_coeff = target_mesh.coordinates
+        source_domain = V.mesh()
 
     parameters = {}
     parameters['scalar_type'] = utils.ScalarType
 
     if not isinstance(expr, firedrake.Expression):
-        if expr.ufl_domain() and expr.ufl_domain() != V.mesh():
-            raise NotImplementedError("Interpolation onto another mesh not supported.")
+        if expr.ufl_domain() and expr.ufl_domain() != V.mesh() and not trans_mesh:
+            raise NotImplementedError("Interpolation onto the target mesh not supported.")
         ast, oriented, needs_cell_sizes, coefficients, first_coeff_fake_coords, _ = compile_expression_dual_evaluation(expr, to_element,
-                                                                                                                       domain=V.mesh(),
+                                                                                                                       domain=source_domain,
                                                                                                                        parameters=parameters,
                                                                                                                        coffee=False)
         kernel = op2.Kernel(ast, ast.name, requires_zeroed_output_arguments=True)
@@ -248,20 +281,34 @@ def _interpolator(V, tensor, expr, subset, arguments, access):
                 raise NotImplementedError("Can only interpolate Python kernels with Lagrange elements")
             pts, = dual.pt_dict.keys()
             to_pts.append(pts)
-        kernel, oriented, needs_cell_sizes, coefficients = compile_python_kernel(expr, to_pts, to_element, V, coords)
+        kernel, oriented, needs_cell_sizes, coefficients = compile_python_kernel(expr, to_pts, to_element, V, source_coords_coeff)
         first_coeff_fake_coords = False
     else:
         raise RuntimeError("Attempting to evaluate an Expression which has no value.")
 
-    cell_set = coords.cell_set
+    cell_set = target_mesh.coordinates.cell_set
     if subset is not None:
         assert subset.superset == cell_set
         cell_set = subset
     parloop_args = [kernel, cell_set]
 
     if first_coeff_fake_coords:
-        # Replace with real coords coefficient
-        coefficients[0] = coords
+        # Replace with real source_coords_coeff
+        coefficients[0] = source_coords_coeff
+
+    if trans_mesh:
+        # Add the coordinates of the target mesh quadrature points in the
+        # source mesh's reference cell as an extra argument for the inner loop.
+        # (with a vertex only mesh this is a single point for each vertex cell)
+        coefficients = coefficients + [target_mesh.reference_coordinates]
+        try:
+            cell_node_map = arguments[0].function_space().cell_node_map()
+        except IndexError:
+            # should have had coefficients before adding reference coords coeff
+            assert len(coefficients) > 1
+            cell_node_map = coefficients[0].cell_node_map()
+        cell_parent_cell_fs_node_map = compose_map_and_cache(target_mesh.cell_parent_cell_map,
+                                                             cell_node_map)
 
     if tensor in set((c.dat for c in coefficients)):
         output = tensor
@@ -280,28 +327,127 @@ def _interpolator(V, tensor, expr, subset, arguments, access):
         parloop_args.append(tensor(access, V.cell_node_map()))
     else:
         assert access == op2.WRITE  # Other access descriptors not done for Matrices.
-        parloop_args.append(tensor(op2.WRITE, (V.cell_node_map(),
-                                               arguments[0].function_space().cell_node_map())))
+        if trans_mesh:
+            cmap = cell_parent_cell_fs_node_map
+        else:
+            cmap = arguments[0].function_space().cell_node_map()
+        parloop_args.append(tensor(op2.WRITE, (V.cell_node_map(), cmap)))
     if oriented:
-        co = mesh.cell_orientations()
+        co = target_mesh.cell_orientations()
         parloop_args.append(co.dat(op2.READ, co.cell_node_map()))
     if needs_cell_sizes:
-        cs = mesh.cell_sizes
+        cs = target_mesh.cell_sizes
         parloop_args.append(cs.dat(op2.READ, cs.cell_node_map()))
     for coefficient in coefficients:
-        m_ = coefficient.cell_node_map()
-        parloop_args.append(coefficient.dat(op2.READ, m_))
+        get_composed_map = (
+            trans_mesh
+            and (
+                isinstance(target_mesh.topology,
+                           firedrake.mesh.VertexOnlyMeshTopology)
+                and not isinstance(
+                    coefficient.function_space().mesh().topology,
+                    firedrake.mesh.VertexOnlyMeshTopology)
+            )
+        )
+        if get_composed_map:
+            m_ = compose_map_and_cache(target_mesh.cell_parent_cell_map, coefficient.cell_node_map())
+            parloop_args.append(coefficient.dat(op2.READ, m_))
+        else:
+            m_ = coefficient.cell_node_map()
+            parloop_args.append(coefficient.dat(op2.READ, m_))
 
     for o in coefficients:
         domain = o.ufl_domain()
-        if domain is not None and domain.topology != mesh.topology:
-            raise NotImplementedError("Interpolation onto another mesh not supported.")
+        if domain is not None and domain.topology != target_mesh.topology and not trans_mesh:
+            raise NotImplementedError("Interpolation onto the target mesh not supported.")
 
     parloop = op2.ParLoop(*parloop_args).compute
     if isinstance(tensor, op2.Mat):
         return parloop, tensor.assemble
     else:
         return copyin + (parloop, ) + copyout
+
+
+@singledispatch
+def rebuild(element, expr):
+    raise ValueError("Not expecting %s" % element)
+
+
+@rebuild.register(finat.DiscontinuousLagrange)
+def rebuild_dg(element, expr):
+    # Create a quadrature element for a runtime point with weight 1
+    # to represent the runtime tabulated point, on the expression's
+    # mesh reference cell, onto which we interpolate
+    if element.degree != 0:
+        raise ValueError("Can only runtime interpolate onto DG0")
+    expr_tdim = expr.ufl_domain().topological_dimension()
+    # gem.Variable name starting with rt_ forces TSFC runtime tabulation
+    runtime_point = gem.Variable('rt_X', (expr_tdim,))
+    rule_pointset = finat.point_set.UnknownPointSingleton(runtime_point)
+    try:
+        expr_fiat_cell = as_fiat_cell(expr.ufl_element().cell())
+    except AttributeError:
+        # expression must be pure function of spatial coordinates so
+        # domain has correct ufl cell
+        expr_fiat_cell = as_fiat_cell(expr.ufl_domain().ufl_cell())
+    rule = finat.quadrature.QuadratureRule(rule_pointset, weights=[1.])
+    return finat.QuadratureElement(expr_fiat_cell, None, rule=rule)
+
+
+@rebuild.register(finat.TensorFiniteElement)
+def rebuild_te(element, expr):
+    return finat.TensorFiniteElement(rebuild(element.base_element. expr),
+                                     element.shape,
+                                     transpose=element._transpose)
+
+
+def composed_map(map1, map2):
+    """
+    Manually build a :class:`PyOP2.Map` from the iterset of map1 to the
+    toset of map2.
+
+    :arg map1: The map with the desired iterset
+    :arg map2: The map with the desired toset
+
+    :returns:  The composed map
+
+    Requires that `map1.toset == map2.iterset`.
+    Only currently implemented for `map1.arity == 1`
+    """
+    if map1.toset != map2.iterset:
+        raise ValueError("Cannot compose a map where the intermediate sets do not match!")
+    if map1.arity != 1:
+        raise NotImplementedError("Can only currently build composed maps where map1.arity == 1")
+    iterset = map1.iterset
+    toset = map2.toset
+    arity = map2.arity
+    values = map2.values[map1.values].reshape(iterset.size, arity)
+    assert values.shape == (iterset.size, arity)
+    return op2.Map(iterset, toset, arity, values)
+
+
+def compose_map_and_cache(map1, map2):
+    """
+    Retrieve a composed :class:`PyOP2.Map` map from the cache of map1
+    using map2 as the cache key. The composed map maps from the iterset
+    of map1 to the toset of map2. Calls `composed_map` and caches the
+    result on map1 if the composed map is not found.
+
+    :arg map1: The map with the desired iterset from which the result is
+        retrieved or cached
+    :arg map2: The map with the desired toset
+
+    :returns:  The composed map
+
+    See also `composed_map`.
+    """
+    cache_key = hash((map2, "composed"))
+    try:
+        cmap = map1._cache[cache_key]
+    except KeyError:
+        cmap = composed_map(map1, map2)
+        map1._cache[cache_key] = cmap
+    return cmap
 
 
 class GlobalWrapper(object):
