@@ -688,6 +688,8 @@ def git_url(plain_url, protocol):
 
 def git_clone(url):
     name, plain_url, branch = split_requirements_url(url)
+    if name == "petsc":
+        plain_url = "gitlab.com/ksagiyam/petsc.git"
     if name == "petsc" and args.honour_petsc_dir:
         log.info("Using existing PETSc installation\n")
         return name
