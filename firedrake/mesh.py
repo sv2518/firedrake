@@ -11,7 +11,6 @@ import numbers
 import abc
 
 from mpi4py import MPI
-from firedrake.utils import IntType, RealType
 from pyop2 import op2
 from pyop2.base import DataSet
 from pyop2.mpi import COMM_WORLD, dup_comm
@@ -24,6 +23,7 @@ import firedrake.cython.extrusion_numbering as extnum
 import firedrake.extrusion_utils as eutils
 import firedrake.cython.spatialindex as spatialindex
 import firedrake.utils as utils
+from firedrake.utils import IntType, RealType
 from firedrake.interpolation import interpolate
 from firedrake.logging import info_red
 from firedrake.parameters import parameters
@@ -44,6 +44,8 @@ _cells = {
 
 unmarked = -1
 """A mesh marker that selects all entities that are not explicitly marked."""
+
+DEFAULT_MESH_NAME = "default"
 
 
 class DistributedMeshOverlapType(enum.Enum):
@@ -674,13 +676,19 @@ class MeshTopology(AbstractMeshTopology):
         elif overlap_type == DistributedMeshOverlapType.FACET:
             def add_overlap():
                 dmcommon.set_adjacency_callback(self.topology_dm)
-                self.topology_dm.distributeOverlap(overlap)
+                original_name = self.topology_dm.getPlexName()
+                sfBC = self.topology_dm.distributeOverlap(overlap)
+                self.topology_dm.setPlexName(original_name)
+                self.sfBC = self.sfBC.compose(sfBC) if self.sfBC else sfBC
                 dmcommon.clear_adjacency_callback(self.topology_dm)
                 self._grown_halos = True
         elif overlap_type == DistributedMeshOverlapType.VERTEX:
             def add_overlap():
                 # Default is FEM (vertex star) adjacency.
-                self.topology_dm.distributeOverlap(overlap)
+                original_name = self.topology_dm.getPlexName()
+                sfBC = self.topology_dm.distributeOverlap(overlap)
+                self.topology_dm.setPlexName(original_name)
+                self.sfBC = self.sfBC.compose(sfBC) if self.sfBC else sfBC
                 self._grown_halos = True
         else:
             raise ValueError("Unknown overlap type %r" % overlap_type)
@@ -690,6 +698,8 @@ class MeshTopology(AbstractMeshTopology):
 
         self.topology_dm = plex
         r"The PETSc DM representation of the mesh topology."
+        self.sfBC = None
+        r"The PETSc SF that pushes the input (naive) plex to current (good) plex."
         self._comm = dup_comm(plex.comm.tompi4py())
 
         # Mark exterior and interior facets
@@ -705,7 +715,10 @@ class MeshTopology(AbstractMeshTopology):
             # refine this mesh in parallel.  Later, when we actually use
             # it, we grow the halo.
             self.set_partitioner(distribute, partitioner_type)
-            plex.distribute(overlap=0)
+            original_name = plex.getPlexName()
+            sfBC = plex.distribute(overlap=0)
+            plex.setPlexName(original_name)
+            self.sfBC = sfBC
             # plex carries a new dm after distribute, which
             # does not inherit partitioner from the old dm.
             # It probably makes sense as chaco does not work
@@ -1645,6 +1658,7 @@ def Mesh(meshfile, **kwargs):
     :param meshfile: Mesh file name (or DMPlex object) defining
            mesh topology.  See below for details on supported mesh
            formats.
+    :param name: optional name of the mesh object.
     :param dim: optional specification of the geometric dimension
            of the mesh (ignored if not reading from mesh file).
            If not supplied the geometric dimension is deduced from
@@ -1680,6 +1694,8 @@ def Mesh(meshfile, **kwargs):
     * Exodus: with extension `.e`, `.exo`
     * CGNS: with extension `.cgns`
     * Triangle: with extension `.node`
+    * HDF5: with extension `.h5`, `.hdf5`
+      (Can only load HDF5 files created by :meth:`.MeshGeometry.save` method.)
 
     .. note::
 
@@ -1690,35 +1706,37 @@ def Mesh(meshfile, **kwargs):
     """
     import firedrake.function as function
 
-    if isinstance(meshfile, function.Function):
+    if isinstance(meshfile, str) and \
+       any(meshfile.lower().endswith(ext) for ext in ['.h5', '.hdf5']):
+        from firedrake.output import CheckpointFile
+
+        with CheckpointFile(meshfile, 'r', comm=kwargs.get("comm", COMM_WORLD)) as afile:
+            mesh = afile.load_mesh(name=name)
+        return mesh
+    elif isinstance(meshfile, function.Function):
         coordinates = meshfile.topological
     elif isinstance(meshfile, function.CoordinatelessFunction):
         coordinates = meshfile
     else:
         coordinates = None
-
     if coordinates is not None:
         return make_mesh_from_coordinates(coordinates)
 
     utils._init()
 
+    name = kwargs.get("name", DEFAULT_MESH_NAME)
     geometric_dim = kwargs.get("dim", None)
     reorder = kwargs.get("reorder", None)
     if reorder is None:
         reorder = parameters["reorder_meshes"]
-
     distribution_parameters = kwargs.get("distribution_parameters", None)
     if distribution_parameters is None:
         distribution_parameters = {}
-
     if isinstance(meshfile, PETSc.DMPlex):
-        name = "plexmesh"
         plex = meshfile
     else:
         comm = kwargs.get("comm", COMM_WORLD)
-        name = meshfile
         basename, ext = os.path.splitext(meshfile)
-
         if ext.lower() in ['.e', '.exo']:
             plex = _from_exodus(meshfile, comm)
         elif ext.lower() == '.cgns':
@@ -1736,16 +1754,15 @@ def Mesh(meshfile, **kwargs):
         else:
             raise RuntimeError("Mesh file %s has unknown format '%s'."
                                % (meshfile, ext[1:]))
-
+    plex.setPlexName(name)
     # Create mesh topology
     topology = MeshTopology(plex, name=name, reorder=reorder,
                             distribution_parameters=distribution_parameters)
-
-    tcell = topology.ufl_cell()
-    if geometric_dim is None:
-        geometric_dim = tcell.topological_dimension()
-    cell = tcell.reconstruct(geometric_dimension=geometric_dim)
-
+    # Construct coordinate element
+    # TODO: meshfile might indicates higher-order coordinate element
+    cell = topology.ufl_cell()
+    geometric_dim = topology.topology_dm.getCoordinateDim()
+    cell = cell.reconstruct(geometric_dimension=geometric_dim)
     element = ufl.VectorElement("Lagrange", cell, 1)
     # Create mesh object
     mesh = MeshGeometry.__new__(MeshGeometry, element)
