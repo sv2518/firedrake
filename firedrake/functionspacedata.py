@@ -56,7 +56,7 @@ def cached(f, mesh, key, *args, **kwargs):
 
 
 @cached
-def get_global_numbering(mesh, key):
+def get_global_numbering(mesh, key, global_numbering=None):
     """Get a PETSc Section describing the global numbering.
 
     This numbering associates function space nodes with topological
@@ -69,6 +69,8 @@ def get_global_numbering(mesh, key):
         degenerate fs x Real tensorproduct.
     :returns: A new PETSc Section.
     """
+    if global_numbering:
+        return global_numbering
     nodes_per_entity, real_tensorproduct = key
     return mesh.create_section(nodes_per_entity, real_tensorproduct)
 
@@ -369,6 +371,35 @@ def entity_dofs_key(entity_dofs):
     return key
 
 
+import ufl
+from tsfc.finatinterface import create_element
+def get_shared_data_key(mesh, element):
+    """Create a FunctionSpaceData key from a ufl element
+
+    :arg mesh: The MeshTopology object
+    :arg element: The ufl element make a key for
+    """
+    if type(element) is ufl.MixedElement:
+        raise ValueError("Can't create FunctionSpace for MixedElement")
+    finat_element = create_element(element)
+    if isinstance(finat_element, finat.TensorFiniteElement):
+        # Retrieve scalar element
+        finat_element = finat_element.base_element
+    # Support foo x Real tensorproduct elements
+    real_tensorproduct = False
+    scalar_element = element
+    if isinstance(element, (ufl.VectorElement, ufl.TensorElement)):
+        scalar_element = element.sub_elements()[0]
+    if isinstance(scalar_element, ufl.TensorProductElement):
+        a, b = scalar_element.sub_elements()
+        real_tensorproduct = b.family() == 'Real'
+
+
+    entity_dofs = finat_element.entity_dofs()
+    nodes_per_entity = tuple(mesh.make_dofs_per_plex_entity(entity_dofs))
+    return (nodes_per_entity, real_tensorproduct)
+
+
 class FunctionSpaceData(object):
     """Function spaces with the same entity dofs share data.  This class
     stores that shared data.  It is cached on the mesh.
@@ -388,10 +419,11 @@ class FunctionSpaceData(object):
 
         # Create the PetscSection mapping topological entities to functionspace nodes
         # For non-scalar valued function spaces, there are multiple dofs per node.
+        key = (nodes_per_entity, real_tensorproduct)
 
         # These are keyed only on nodes per topological entity.
-        global_numbering = get_global_numbering(mesh, (nodes_per_entity, real_tensorproduct))
-        node_set = get_node_set(mesh, (nodes_per_entity, real_tensorproduct))
+        global_numbering = get_global_numbering(mesh, key)
+        node_set = get_node_set(mesh, key)
 
         edofs_key = entity_dofs_key(entity_dofs)
 
