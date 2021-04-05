@@ -2699,3 +2699,84 @@ def label_pic_parent_cell_nums(PETSc.DM swarm, parentmesh):
     # have to restore fields once accessed to allow access again
     swarm.restoreField("parentcellnum")
     swarm.restoreField("DMSwarmPIC_coor")
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def write_vec_with_petsc_orientation(mesh,
+                                     PETSc.Section sec,
+                                     PETSc.Vec vec):
+    """
+    Convert to PETSc DoF array.
+
+    :arg mesh: MeshTopology
+    :arg sec: Section describing the process local DoF numbering
+    :arg vec: Vec data associated with sec
+
+    """
+    cdef:
+        PETSc.DM dm
+        PetscInt pStart, pEnd
+        PetscInt c, cStart, cEnd, cell
+        PetscInt closureSize, coneSize, cl, cn, l
+        PetscInt *closure = NULL
+        const PetscInt *cone = NULL
+        PetscInt p, o
+        PetscInt maxDof, i, ndofs, off
+        PetscScalar *array = NULL
+        PetscScalar *entity_arr = NULL
+        PetscInt *entity_idx = NULL
+        PetscInt *local_indices = NULL
+        PetscBT seen = NULL
+        PetscInt nseen
+        PETSc.Section cell_numbering
+        np.ndarray[PetscInt, ndim=2, mode="c"] cell_closures
+
+    dm = mesh.topology_dm
+
+    get_height_stratum(dm.dm, 0, &cStart, &cEnd)
+    cell_numbering = mesh._cell_numbering
+    cell_closures = mesh.cell_closure
+
+    CHKERR(PetscSectionGetMaxDof(sec.sec, &maxDof))
+    CHKERR(PetscMalloc2(maxDof, &entity_idx, maxDof, &local_indices))
+    CHKERR(PetscMalloc1(maxDof, &entity_arr))
+    CHKERR(VecGetArray(vec.vec, &array))
+    get_chart(dm.dm, &pStart, &pEnd)
+    CHKERR(PetscBTCreate(pEnd - pStart, &seen))
+    nseen = 0
+    for c in range(cStart, cEnd):
+        CHKERR(PetscSectionGetOffset(cell_numbering.sec, c, &cell))
+        CHKERR(DMPlexGetTransitiveClosure(dm.dm, c, PETSC_TRUE, &closureSize, &closure))
+        for cl in range(closureSize):
+            p = closure[2 * cl]
+            if PetscBTLookup(seen, p): continue
+            PetscBTSet(seen, p)
+            nseen += 1
+            o = closure[2 * cl + 1]
+            CHKERR(PetscSectionGetDof(sec.sec, p, &ndofs))
+            if ndofs > 0:
+                CHKERR(PetscSectionGetOffset(sec.sec, p, &off))
+                for i in range(ndofs):
+                    entity_idx[i] = off + i
+                    entity_arr[i] = array[off + i]
+                CHKERR(DMPlexGetConeSize(dm.dm, p, &coneSize))
+                CHKERR(DMPlexGetCone(dm.dm, p, &cone))
+                for cn in range(coneSize):
+                    l = 0
+                    while cell_closures[cell, l] != cone[cn]: l += 1
+                    assert l < closureSize, "cone point not found"
+                    local_indices[cn] = l
+                if coneSize == 2:
+                    o_firedrake = 0 if local_indices[0] < local_indices[1] else -2
+                    #if o_firedrake != o:
+                    if local_indices[0] > local_indices[1]:
+                        for i in range(ndofs):
+                            array[entity_idx[i]] = entity_arr[ndofs-1-i]
+                #CHKERR(DMPlexRestoreCone(dm.dm, p, &cone))
+        CHKERR(DMPlexRestoreTransitiveClosure(dm.dm, c, PETSC_TRUE, &closureSize, &closure))
+    assert nseen == pEnd - pStart, "Not all points covered"
+    CHKERR(PetscBTDestroy(&seen))
+    CHKERR(VecRestoreArray(vec.vec, &array))
+    CHKERR(PetscFree(entity_arr))
+    CHKERR(PetscFree2(entity_idx,local_indices))
