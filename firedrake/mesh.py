@@ -445,6 +445,15 @@ class AbstractMeshTopology(object, metaclass=abc.ABCMeta):
         """
         pass
 
+    @property
+    @abc.abstractmethod
+    def entity_orientation(self):
+        """2D array of cell orientations
+
+        Each row contains orientation of the associated cell.
+        """
+        pass
+
     @abc.abstractmethod
     def _facets(self, kind):
         pass
@@ -489,15 +498,16 @@ class AbstractMeshTopology(object, metaclass=abc.ABCMeta):
         """
         return tuple(np.dot(nodes_per_entity, self._entity_classes))
 
-    def make_cell_node_list(self, global_numbering, entity_dofs, offsets):
+    def make_cell_node_list(self, global_numbering, entity_dofs, permutations, offsets):
         """Builds the DoF mapping.
 
         :arg global_numbering: Section describing the global DoF numbering
         :arg entity_dofs: FInAT element entity DoFs
+        :arg permutations:
         :arg offsets: layer offsets for each entity dof (may be None).
         """
         return dmcommon.get_cell_nodes(self, global_numbering,
-                                       entity_dofs, offsets)
+                                       entity_dofs, permutations, offsets)
 
     def make_dofs_per_plex_entity(self, entity_dofs):
         """Returns the number of DoFs per plex entity for each stratum,
@@ -839,6 +849,10 @@ class MeshTopology(AbstractMeshTopology):
         else:
             raise NotImplementedError("Cell type '%s' not supported." % cell)
 
+    @utils.cached_property
+    def entity_orientation(self):
+        return dmcommon.entity_orientation(self.topology_dm, self.cell_closure)
+
     def _facets(self, kind):
         if kind not in ["interior", "exterior"]:
             raise ValueError("Unknown facet type '%s'" % kind)
@@ -1055,6 +1069,11 @@ class ExtrudedMeshTopology(MeshTopology):
         """
         return self._base_mesh.cell_closure
 
+    @utils.cached_property
+    def entity_orientation(self):
+        return None
+        #return self._base_mesh.entity_orientation
+
     def _facets(self, kind):
         if kind not in ["interior", "exterior"]:
             raise ValueError("Unknown facet type '%s'" % kind)
@@ -1066,15 +1085,51 @@ class ExtrudedMeshTopology(MeshTopology):
                        markers=base.markers,
                        unique_markers=base.unique_markers)
 
-    def make_cell_node_list(self, global_numbering, entity_dofs, offsets):
+    def make_cell_node_list(self, global_numbering, entity_dofs, permutations, offsets):
         """Builds the DoF mapping.
 
         :arg global_numbering: Section describing the global DoF numbering
         :arg entity_dofs: FInAT element entity DoFs
+        :arg permutations:
         :arg offsets: layer offsets for each entity dof.
         """
+        assert sorted(entity_dofs.keys()) == sorted(permutations.keys()), "Mismatching keys"
+        """
+        exit(0)
+        for b, v in entity_dofs:
+            if v == 0:
+                continue
+            permutations_ext[b] = {}
+            for o, perm in permutations[b].items():
+                if len(perm) == 0:
+                    permutations_ext[b][o] = ()
+                else:
+                    k = 0
+                    n, = set([len(entity_dofs[(b, 0)][2*k]),
+                              len(entity_dofs[(b, 0)][2*k+1])])
+                    mn = len(entity_dofs[(b, 1)][k])
+                    assert mn % n == 0, f"Mismatching base ({n}) and vertical ({mn}) sizes"
+                    m = mn // n
+                    # Permute whole columns
+                    permutations_ext[b][o] = perm + \
+                                             tuple(n + m * perm[i] + j for i in range(n) for j in range(m)) + \
+                                             tuple(n + mn + p for p in perm)
+        """
+        assert all(v == 0 or v == 1 for b, v in permutations), f"Vertical dim ({v}) out of range"
+        permutations_ext = {}
+        for b in set(b for b, v in permutations):
+            permutations_ext[b] = {}
+            for ob in set(ob for ob, ov in permutations[(b, 0)]):
+                # Orientation in the extruded direction is always 0
+                ov = 0
+                perm0 = permutations[(b, 0)][(ob, ov)]
+                perm1 = permutations[(b, 1)][(ob, ov)]
+                n0, n1 = len(perm0), len(perm1)
+                permutations_ext[b][ob] = list(perm0) + \
+                                          [n0 + p for p in perm1] + \
+                                          [n0 + n1 + p for p in perm0]
         entity_dofs = eutils.flat_entity_dofs(entity_dofs)
-        return super().make_cell_node_list(global_numbering, entity_dofs, offsets)
+        return super().make_cell_node_list(global_numbering, entity_dofs, permutations_ext, offsets)
 
     def make_dofs_per_plex_entity(self, entity_dofs):
         """Returns the number of DoFs per plex entity for each stratum,
@@ -1271,6 +1326,10 @@ class VertexOnlyMeshTopology(AbstractMeshTopology):
 
         return dmcommon.closure_ordering(swarm, vertex_numbering,
                                          cell_numbering, entity_per_cell)
+
+    @utils.cached_property
+    def entity_orientation(self):
+        return None
 
     def _facets(self, kind):
         """Raises an AttributeError since cells in a

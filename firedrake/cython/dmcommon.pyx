@@ -1,6 +1,7 @@
 # cython: language_level=3
 
 # Utility functions common to all DMs used in Firedrake
+import functools
 import cython
 import numpy as np
 from firedrake.petsc import PETSc
@@ -650,6 +651,151 @@ def quadrilateral_closure_ordering(PETSc.DM plex,
     return cell_closure
 
 
+def get_simplex_orientation(entity_list, cone_list):
+    inds = []
+    for q in entity_list:
+        if q in cone_list:
+            k = cone_list.index(q)
+            inds.append(k)
+            cone_list.pop(k)
+    assert len(cone_list) == 0
+    n = len(inds)
+    o = functools.reduce(lambda a, b: a + b,
+                         [np.math.factorial(n - 1 - i) * ind for i, ind in enumerate(inds)])
+    return o
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def entity_orientation(PETSc.DM dm,
+                     np.ndarray[PetscInt, ndim=2, mode="c"] cell_closure):
+    """Compute cell orientation.
+
+    :arg dm: The DM object encapsulating the mesh topology
+    :arg cell_closure: The two-dimensional array, each row of which contains
+        the closure of the associated cell
+
+    Each row of cell_closure must have been ordered to work well with
+    FInAT entity_dofs to create cell_node map (see `get_cell_nodes`).
+    """
+    cdef:
+        PetscInt c, f0, f1, f2, cStart, cEnd, cell
+        PetscInt numFacets, numVertices, fStart, coneSize
+        PetscInt *cone = NULL
+        PetscInt *cell_cone = NULL
+        PetscInt *facet_cone = NULL
+        np.ndarray[PetscInt, ndim=2, mode="c"] entity_orientation
+
+    dim = get_topological_dimension(dm)
+    # FInAT reference ordering
+    # DoFs are laid in the direction of
+    # increasing local point index
+    if dim == 0:
+        # No orientation
+        return None
+    elif dim == 1:
+        return None  # NotImplemented
+    elif dim == 2:
+        get_height_stratum(dm.dm, 0, &cStart, &cEnd)
+        numFacets = dm.getConeSize(cStart)
+        if numFacets == 3:
+            # FInAT reference ordering: triangle
+            #
+            #   1
+            #   | \
+            #   5   3
+            #   | 6   \
+            #   0--4---2
+            #
+            cell_type = "simplex"
+        elif numFacets == 4:
+            # FInAT reference ordering: quad
+            #
+            #   2---5---3
+            #   |       |
+            #   6   8   7
+            #   |       |
+            #   0---4---1
+            #
+            cell_type = "quad"
+            #return None  # NotImplemented
+        else:
+            return None  # NotImplemented
+    else:
+        return None  # NotImplemented
+
+    numCells = cell_closure.shape[0]
+    entity_per_cell = cell_closure.shape[1]
+    entity_orientation = np.zeros((numCells, entity_per_cell), dtype=IntType)
+    if cell_type == "simplex":
+
+        def ncr(n ,r):
+            return np.math.factorial(n) // np.math.factorial(r) // np.math.factorial(n - r)
+
+        # number of entities in each dimension
+        ecounts = [ncr(dim + 1, i) for i in range(1, dim + 2)]
+        eoffsets = [0] * (dim + 2)
+        for d in range(1, dim + 2):
+            eoffsets[d] = eoffsets[d - 1] + ecounts[d - 1]
+        for cell in range(numCells):
+            for d in range(dim + 1):
+                for i in range(eoffsets[d], eoffsets[d + 1]):
+                    if d == 0:
+                        o = 0
+                    else:
+                        p = cell_closure[cell, i]
+                        CHKERR(DMPlexGetConeSize(dm.dm, p, &coneSize))
+                        CHKERR(DMPlexGetCone(dm.dm, p, &cone))
+                        cone_list = [cone[icone] for icone in range(coneSize)]
+                        # Use lexicographical ordering of non-incident vertices
+                        # also for vertices; e.g., reverse the order.
+                        eStart = eoffsets[d - 1]
+                        eEnd = eoffsets[d]
+                        if d != 1:
+                            entity_list = cell_closure[cell, eStart:eEnd]
+                        else:
+                            entity_list = cell_closure[cell, tuple(range(eEnd-1, eStart-1, -1))]
+                        o = get_simplex_orientation(entity_list, cone_list)
+                    entity_orientation[cell, i] = o
+    elif cell_type == "quad":
+        # number of entities in each dimension
+        ecounts = [4, 4, 1]
+        eoffsets = [0, 4, 8, 9]
+        for cell in range(numCells):
+            for d in range(dim + 1):
+                for i in range(eoffsets[d], eoffsets[d + 1]):
+                    if d == 0:
+                        o = 0
+                    elif d == 1:
+                        p = cell_closure[cell, i]
+                        CHKERR(DMPlexGetConeSize(dm.dm, p, &coneSize))
+                        CHKERR(DMPlexGetCone(dm.dm, p, &cone))
+                        cone_list = [cone[icone] for icone in range(coneSize)]
+                        eStart = eoffsets[d - 1]
+                        eEnd = eoffsets[d]
+                        entity_list = cell_closure[cell, eStart:eEnd]
+                        o = get_simplex_orientation(entity_list, cone_list)
+                    else:  # d == 2
+                        p = cell_closure[cell, i]
+                        CHKERR(DMPlexGetConeSize(dm.dm, p, &coneSize))
+                        CHKERR(DMPlexGetCone(dm.dm, p, &cone))
+                        cone_list = [cone[icone] for icone in range(coneSize)]
+                        inds = []
+                        eStart = eoffsets[d - 1]
+                        eEnd = eoffsets[d]
+                        q = cell_closure[cell, eStart]
+                        k = cone_list.index(q)
+                        inds.append(k)
+                        cone_list.pop(k)
+                        k0 = cone_list.index(cell_closure[cell, eStart + 2])
+                        k1 = cone_list.index(cell_closure[cell, eStart + 3])
+                        inds.append(int(k0 > k1))
+                        o = 2 * inds[0] + inds[1]
+                    entity_orientation[cell, i] = o
+    return entity_orientation
+
+
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def create_section(mesh, nodes_per_entity, on_base=False):
@@ -727,6 +873,7 @@ def create_section(mesh, nodes_per_entity, on_base=False):
 def get_cell_nodes(mesh,
                    PETSc.Section global_numbering,
                    entity_dofs,
+                   permutations,
                    np.ndarray[PetscInt, ndim=1, mode="c"] offset):
     """
     Builds the DoF mapping.
@@ -734,6 +881,7 @@ def get_cell_nodes(mesh,
     :arg mesh: The mesh
     :arg global_numbering: Section describing the global DoF numbering
     :arg entity_dofs: FInAT element entity dofs for the cell
+    :arg permutations:
     :arg offset: offsets for each entity dof walking up a column.
 
     Preconditions: This function assumes that cell_closures contains mesh
@@ -744,6 +892,7 @@ def get_cell_nodes(mesh,
     """
     cdef:
         int *ceil_ndofs = NULL
+        int *entity_dims = NULL
         int *flat_index = NULL
         PetscInt nclosure, dofs_per_cell
         PetscInt c, i, j, k, cStart, cEnd, cell
@@ -752,12 +901,17 @@ def get_cell_nodes(mesh,
         np.ndarray[PetscInt, ndim=2, mode="c"] cell_nodes
         np.ndarray[PetscInt, ndim=2, mode="c"] layer_extents
         np.ndarray[PetscInt, ndim=2, mode="c"] cell_closures
+        np.ndarray[PetscInt, ndim=2, mode="c"] cell_orientations
         bint variable
         PETSc.DM dm
 
     dm = mesh.topology_dm
     variable = mesh.variable_layers
     cell_closures = mesh.cell_closure
+    cell_orientations = mesh.entity_orientation
+    #Eventually define for all mesh types.
+    #no op if mesh.entity_orientation is None
+    cell_orientations_defined = cell_orientations is not None
     if variable:
         layer_extents = mesh.layer_extents
         if offset is None:
@@ -767,6 +921,7 @@ def get_cell_nodes(mesh,
 
     # Extract ordering from FInAT element entity DoFs
     ndofs_list = []
+    dims_list = []
     flat_index_list = []
 
     for dim in sorted(entity_dofs.keys()):
@@ -774,6 +929,7 @@ def get_cell_nodes(mesh,
             dofs = entity_dofs[dim][entity_num]
 
             ndofs_list.append(len(dofs))
+            dims_list.append(dim)
             flat_index_list.extend(dofs)
 
     # Coerce lists into C arrays
@@ -781,10 +937,12 @@ def get_cell_nodes(mesh,
     dofs_per_cell = len(flat_index_list)
 
     CHKERR(PetscMalloc1(nclosure, &ceil_ndofs))
+    CHKERR(PetscMalloc1(nclosure, &entity_dims))
     CHKERR(PetscMalloc1(dofs_per_cell, &flat_index))
 
     for i in range(nclosure):
         ceil_ndofs[i] = ndofs_list[i]
+        entity_dims[i] = dims_list[i]
     for i in range(dofs_per_cell):
         flat_index[i] = flat_index_list[i]
 
@@ -798,6 +956,11 @@ def get_cell_nodes(mesh,
         CHKERR(PetscSectionGetOffset(cell_numbering.sec, c, &cell))
         for i in range(nclosure):
             entity = cell_closures[cell, i]
+            dim = entity_dims[i]
+            if cell_orientations_defined:
+                orient = cell_orientations[cell, i]
+            else:
+                orient = 0
             CHKERR(PetscSectionGetDof(global_numbering.sec, entity, &ndofs))
             if ndofs > 0:
                 CHKERR(PetscSectionGetOffset(global_numbering.sec, entity, &off))
@@ -807,10 +970,11 @@ def get_cell_nodes(mesh,
                 if variable:
                     off += offset[flat_index[k]]*(layer_extents[c, 0] - layer_extents[entity, 0])
                 for j in range(ceil_ndofs[i]):
-                    cell_nodes[cell, flat_index[k]] = off + j
+                    cell_nodes[cell, flat_index[k]] = off + permutations[dim][orient][j]
                     k += 1
 
     CHKERR(PetscFree(ceil_ndofs))
+    CHKERR(PetscFree(entity_dims))
     CHKERR(PetscFree(flat_index))
     return cell_nodes
 
