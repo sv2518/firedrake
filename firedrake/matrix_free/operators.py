@@ -13,6 +13,7 @@ from firedrake.utils import cached_property
 __all__ = ("ImplicitMatrixContext", )
 
 
+@PETSc.Log.EventDecorator()
 def find_sub_block(iset, ises):
     """Determine if iset comes from a concatenation of some subset of
     ises.
@@ -81,6 +82,7 @@ class ImplicitMatrixContext(object):
        preconditioners and the like.
 
     """
+    @PETSc.Log.EventDecorator()
     def __init__(self, a, row_bcs=[], col_bcs=[],
                  fc_params=None, appctx=None):
         self.a = a
@@ -184,6 +186,7 @@ class ImplicitMatrixContext(object):
     def missingDiagonal(self, mat):
         return (False, -1)
 
+    @PETSc.Log.EventDecorator()
     def mult(self, mat, X, Y):
         with self._x.dat.vec_wo as v:
             X.copy(v)
@@ -217,6 +220,7 @@ class ImplicitMatrixContext(object):
         with self._y.dat.vec_ro as v:
             v.copy(Y)
 
+    @PETSc.Log.EventDecorator()
     def multTranspose(self, mat, Y, X):
         """
         EquationBC makes multTranspose different from mult.
@@ -318,6 +322,7 @@ class ImplicitMatrixContext(object):
     # extraction for our custom matrix type.  Note that we are splitting UFL
     # and index sets rather than an assembled matrix, keeping matrix
     # assembly deferred as long as possible.
+    @PETSc.Log.EventDecorator()
     def createSubMatrix(self, mat, row_is, col_is, target=None):
         if target is not None:
             # Repeat call, just return the matrix, since we don't
@@ -379,6 +384,7 @@ class ImplicitMatrixContext(object):
 
         return submat
 
+    @PETSc.Log.EventDecorator()
     def duplicate(self, mat, copy):
 
         if copy == 0:

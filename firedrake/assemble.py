@@ -50,6 +50,7 @@ Please refer to :func:`assemble` for a description of the options.
 """
 
 
+@PETSc.Log.EventDecorator()
 @annotate_assemble
 def assemble(expr, tensor=None, bcs=None, *,
              diagonal=False,
@@ -132,6 +133,7 @@ def assemble(expr, tensor=None, bcs=None, *,
         raise TypeError(f"Unable to assemble: {expr}")
 
 
+@PETSc.Log.EventDecorator()
 def assemble_form(expr, tensor, bcs, diagonal, assembly_type,
                   form_compiler_parameters,
                   mat_type, sub_mat_type,
@@ -170,6 +172,7 @@ def assemble_form(expr, tensor, bcs, diagonal, assembly_type,
         raise AssertionError
 
 
+@PETSc.Log.EventDecorator()
 def allocate_matrix(expr, bcs=(), form_compiler_parameters=None,
                     mat_type=None, sub_mat_type=None, appctx={},
                     options_prefix=None):
@@ -191,6 +194,7 @@ def allocate_matrix(expr, bcs=(), form_compiler_parameters=None,
     return _make_matrix(expr, bcs, opts)
 
 
+@PETSc.Log.EventDecorator()
 def create_assembly_callable(expr, tensor=None, bcs=None, form_compiler_parameters=None,
                              mat_type=None, sub_mat_type=None, diagonal=False):
     r"""Create a callable object than be used to assemble expr into a tensor.
@@ -237,6 +241,7 @@ def _get_assembly_rank(expr, diagonal):
     raise AssertionError
 
 
+@PETSc.Log.EventDecorator()
 def _assemble_scalar(expr, bcs, opts):
     """Assemble a 0-form.
 
@@ -257,6 +262,7 @@ def _assemble_scalar(expr, bcs, opts):
     return scalar.data[0]
 
 
+@PETSc.Log.EventDecorator()
 def _assemble_vector(expr, vector, bcs, opts):
     """Assemble either a 1-form or the diagonal of a 2-form.
 
@@ -292,6 +298,7 @@ def _assemble_vector(expr, vector, bcs, opts):
     return vector
 
 
+@PETSc.Log.EventDecorator()
 def _assemble_matrix(expr, matrix, bcs, opts):
     """Assemble a 2-form into a matrix.
 
@@ -322,6 +329,7 @@ def _assemble_matrix(expr, matrix, bcs, opts):
     return matrix
 
 
+@PETSc.Log.EventDecorator()
 def _make_scalar():
     """Make an empty scalar.
 
@@ -330,6 +338,7 @@ def _make_scalar():
     return op2.Global(1, [0.0], dtype=utils.ScalarType)
 
 
+@PETSc.Log.EventDecorator()
 def _make_vector(V):
     """Make an empty vector.
 
@@ -340,6 +349,7 @@ def _make_vector(V):
     return firedrake.Function(V.function_space())
 
 
+@PETSc.Log.EventDecorator()
 def _make_matrix(expr, bcs, opts):
     """Make an empty matrix.
 
@@ -417,6 +427,7 @@ def _make_matrix(expr, bcs, opts):
                          options_prefix=opts.options_prefix)
 
 
+@PETSc.Log.EventDecorator()
 def _assemble_expr(expr, tensor, bcs, opts, assembly_rank):
     """Assemble an expression into the provided tensor.
 
@@ -482,6 +493,7 @@ def _get_mat_type(mat_type, sub_mat_type, arguments):
     return mat_type, sub_mat_type
 
 
+@PETSc.Log.EventDecorator()
 def _collect_lgmaps(matrix, all_bcs, Vrow, Vcol, row, col):
     """Obtain local to global maps for matrix insertion in the
     presence of boundary conditions.
@@ -517,6 +529,7 @@ def _collect_lgmaps(matrix, all_bcs, Vrow, Vcol, row, col):
     return (rlgmap, clgmap), unroll
 
 
+@PETSc.Log.EventDecorator()
 def _vector_arg(access, get_map, i, *, function, V):
     """Obtain an :class:`~pyop2.op2.Arg` for insertion into a given
     vector (:class:`Function`).
@@ -538,6 +551,7 @@ def _vector_arg(access, get_map, i, *, function, V):
         return function.dat[i](access, map_)
 
 
+@PETSc.Log.EventDecorator()
 def _matrix_arg(access, get_map, row, col, *,
                 all_bcs, matrix, Vrow, Vcol):
     """Obtain an op2.Arg for insertion into the given matrix.
@@ -572,6 +586,7 @@ def _matrix_arg(access, get_map, row, col, *,
                                   unroll_map=unroll)
 
 
+@PETSc.Log.EventDecorator()
 def _apply_dirichlet_bcs(tensor, bcs, opts, assembly_rank):
     """Apply Dirichlet boundary conditions to a tensor.
 
@@ -625,6 +640,7 @@ def _apply_dirichlet_bcs(tensor, bcs, opts, assembly_rank):
         raise AssertionError
 
 
+@PETSc.Log.EventDecorator()
 @utils.known_pyop2_safe
 def _make_parloops(expr, tensor, bcs, diagonal, fc_params, assembly_rank):
     """Create parloops for the assembly of the expression.

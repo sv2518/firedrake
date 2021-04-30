@@ -400,6 +400,7 @@ class FunctionSpaceData(object):
                  "interior_facet_boundary_masks", "offset",
                  "extruded", "mesh", "global_numbering")
 
+    @PETSc.Log.EventDecorator()
     def __init__(self, mesh, finat_element, real_tensorproduct=False):
         entity_dofs = finat_element.entity_dofs()
         nodes_per_entity = tuple(mesh.make_dofs_per_plex_entity(entity_dofs))
@@ -442,6 +443,7 @@ class FunctionSpaceData(object):
     def __str__(self):
         return "FunctionSpaceData(%s, %s)" % (self.mesh, self.node_set)
 
+    @PETSc.Log.EventDecorator()
     def boundary_nodes(self, V, sub_domain, method):
         if method not in {"topological", "geometric"}:
             raise ValueError("Don't know how to extract nodes with method '%s'", method)
@@ -460,6 +462,7 @@ class FunctionSpaceData(object):
             key = (entity_dofs_key(V.finat_element.entity_dofs()), sdkey, method)
             return get_boundary_nodes(V.mesh(), key, V)
 
+    @PETSc.Log.EventDecorator()
     def get_map(self, V, entity_set, map_arity, name, offset):
         """Return a :class:`pyop2.Map` from some topological entity to
         degrees of freedom.
@@ -485,6 +488,7 @@ class FunctionSpaceData(object):
         return val
 
 
+@PETSc.Log.EventDecorator()
 def get_shared_data(mesh, finat_element, real_tensorproduct=False):
     """Return the :class:`FunctionSpaceData` for the given
     element.

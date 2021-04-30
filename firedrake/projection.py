@@ -2,6 +2,7 @@ import abc
 import ufl
 
 import firedrake
+from firedrake.petsc import PETSc
 from firedrake.utils import cached_property, complex_mode, SLATE_SUPPORTS_COMPLEX
 from firedrake import expression
 from firedrake import functionspace
@@ -64,6 +65,7 @@ def check_meshes(source, target):
     return source_mesh, target_mesh
 
 
+@PETSc.Log.EventDecorator()
 @annotate_project
 def project(v, V, bcs=None,
             solver_parameters=None,
@@ -207,6 +209,7 @@ class SupermeshProjector(ProjectorBase):
         return self.residual
 
 
+@PETSc.Log.EventDecorator()
 def Projector(v, v_out, bcs=None, solver_parameters=None,
               form_compiler_parameters=None, constant_jacobian=True,
               use_slate_for_inverse=False):

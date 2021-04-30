@@ -17,6 +17,18 @@ del os, sys, config
 
 # Ensure petsc is initialised by us before anything else gets in there.
 import firedrake.petsc as petsc
+
+# Initialise PETSc events for both import and entire duration of program
+_main_event = petsc.PETSc.Log.Event("firedrake")
+_main_event.begin()
+
+_init_event = petsc.PETSc.Log.Event("firedrake.__init__")
+_init_event.begin()
+
+import atexit
+atexit.register(lambda: _main_event.end())
+
+del atexit
 del petsc
 
 # UFL Exprs come with a custom __del__ method, but we hold references
@@ -100,3 +112,6 @@ del check
 from firedrake._version import get_versions
 __version__ = get_versions()['version']
 del get_versions
+
+# Stop profiling Firedrake import
+_init_event.end()
