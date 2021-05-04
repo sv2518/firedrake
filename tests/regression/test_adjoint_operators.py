@@ -496,3 +496,27 @@ def test_replay(op, order, power):
             tt /= tt
         assert np.isclose(rf_s(t_orig), assemble(f(tt)*dx))
         assert np.isclose(rf_t(s_orig), assemble(f(ss)*dx))
+
+
+@pytest.mark.skipcomplex  # Taping for complex-valued 0-forms not yet done
+def test_init_constant():
+    from firedrake_adjoint import ReducedFunctional, Control
+    mesh = UnitSquareMesh(1, 1)
+    c1 = Constant(1.0, domain=mesh)
+    c2 = Constant(c1, domain=mesh)
+    J = assemble(c2*dx)
+    rf = ReducedFunctional(J, Control(c1))
+    assert np.isclose(rf(-1.0), -1.0)
+
+
+@pytest.mark.skipcomplex  # Taping for complex-valued 0-forms not yet done
+def test_copy_function():
+    from firedrake_adjoint import ReducedFunctional, Control
+    mesh = UnitSquareMesh(1, 1)
+    V = FunctionSpace(mesh, "CG", 1)
+    one = Constant(1.0)
+    f = interpolate(one, V)
+    g = f.copy(deepcopy=True)
+    J = assemble(g*dx)
+    rf = ReducedFunctional(J, Control(f))
+    assert np.isclose(rf(interpolate(-one, V)), -J)
