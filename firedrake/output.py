@@ -1,11 +1,19 @@
 import collections
 import itertools
+import pickle
 import numpy
 import os
 import ufl
 from itertools import chain
-from pyop2.mpi import COMM_WORLD, dup_comm
+import h5py
+from petsc4py import PETSc
+from petsc4py.PETSc import ViewerHDF5
+from pyop2.mpi import COMM_WORLD, dup_comm, MPI
 from firedrake.utils import IntType
+from firedrake.mesh import Mesh, DEFAULT_MESH_NAME
+from firedrake.functionspace import FunctionSpace
+from firedrake.function import Function
+from firedrake.cython import hdf5interface
 from pyop2.utils import as_tuple
 from pyadjoint import no_annotations
 
@@ -13,8 +21,12 @@ from .paraview_reordering import vtk_lagrange_tet_reorder,\
     vtk_lagrange_hex_reorder, vtk_lagrange_interval_reorder,\
     vtk_lagrange_triangle_reorder, vtk_lagrange_quad_reorder,\
     vtk_lagrange_wedge_reorder
-__all__ = ("File", )
 
+
+__all__ = ("File", "CheckpointFile")
+
+
+PREFIX = "firedrake"
 
 VTK_INTERVAL = 3
 VTK_TRIANGLE = 5
@@ -648,3 +660,242 @@ class File(object):
                          'file="%s" />\n' % (time, vtu)).encode('ascii'))
                 # And add footer again, so that the file is valid
                 f.write(self._footer)
+
+
+def _get_format(viewer):
+    h5pyfile = hdf5interface.get_h5py_file(viewer)
+    if all(d in h5pyfile for d in ['/geometry/vertices',
+                                   '/topology/cells',
+                                   '/topology/cones',
+                                   '/topology/order',
+                                   '/topology/orientation']):
+        return ViewerHDF5.Format.HDF5_PETSC
+    elif all(d in h5pyfile for d in ['/labels/celltype',
+                                     '/geometry/vertices',
+                                     '/viz/topology/cells']):
+        return ViewerHDF5.Format.HDF5_XDMF
+    else:
+        raise RuntimeError("Unknown HDF5 file format used in %s", viewer.getFileName())
+
+
+def _dmload_plex(viewer, name):
+    plex = PETSc.DMPlex()
+    plex.create(comm=viewer.comm)
+    plex.setPlexName(name)
+    format = _get_format(viewer)
+    viewer.pushFormat(format=format)
+    if format == ViewerHDF5.Format.HDF5_PETSC:
+        sfXB = plex.topologyLoad(viewer)
+        plex.coordinatesLoad(viewer)
+        plex.labelsLoad(viewer)
+        plex.setOptionsPrefix("loaded_")
+        plex.viewFromOptions("-dm_view")
+    elif format == ViewerHDF5.Format.HDF5_XDMF:
+        plex.load(viewer=viewer)  # TODO: load labels, too.
+        plex.setOptionsPrefix("loaded_")
+        plex.viewFromOptions("-dm_view")
+        plex.interpolate()
+        plex.setOptionsPrefix("interpolated_")
+        plex.viewFromOptions("-dm_view")
+        sfXB = None
+    viewer.popFormat()
+    return plex, sfXB
+
+
+from firedrake.functionspacedata import get_global_numbering, get_shared_data_key
+def get_sectiondm_name(nodes_per_entity, real_tensorproduct):
+    return "_".join(["sectiondm"] +
+                    [str(n) for n in nodes_per_entity] +
+                    [str(real_tensorproduct)])
+
+
+
+def find_sectiondm_name(h5file, mesh_name, fs_name):
+    h5group = h5file[os.path.join("/topologies", mesh_name, "dms")]
+    for sectiondm_name in h5group:
+        if fs_name in h5group[os.path.join(sectiondm_name, PREFIX + "_function_spaces")]:
+            return sectiondm_name
+    raise ValueError(f"FunctionSpace {fs_name} not found.")
+
+
+def find_function_space_name(h5file, mesh_name, function_name):
+    h5group = h5file[os.path.join("/topologies", mesh_name, "dms")]
+    for sectiondm_name in h5group:
+        if function_name in h5group[os.path.join(sectiondm_name, "vecs")]:
+            return h5group[os.path.join(sectiondm_name, "vecs")][function_name].attrs[PREFIX + "_function_space"]
+    raise ValueError(f"Function {function_name} not found.")
+
+
+class CheckpointFile(object):
+    _mesh_cache = {}
+    _functionspace_cache = {}
+    _function_space_data_cache = {}
+    _saved_mesh_cache = {}
+    _saved_function_space_cache = {}
+
+    def __init__(self, filename, mode, comm=COMM_WORLD):
+        self.viewer = ViewerHDF5()
+        self.viewer.create(filename, mode=mode, comm=comm)
+        commkey = comm.py2f()
+        assert commkey != MPI.COMM_NULL.py2f()
+        self._meshes = self._mesh_cache.setdefault((filename, commkey), {})
+        self._function_spaces = self._functionspace_cache.setdefault((filename, commkey), {})
+        self._function_space_datas = self._function_space_data_cache.setdefault((filename, commkey), {})
+        self._saved_meshes = self._saved_mesh_cache.setdefault((filename, commkey), [])
+        self._saved_function_spaces = self._saved_function_space_cache.setdefault((filename, commkey), [])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def save_mesh(self, mesh, format=ViewerHDF5.Format.HDF5_PETSC):
+        if mesh in self._saved_meshes:
+            return
+        if format not in [ViewerHDF5.Format.HDF5_PETSC, ViewerHDF5.Format.HDF5_XDMF]:
+            raise TypeError("Unknown output format %s." % format)
+        dm = mesh.topology.topology_dm
+        self.viewer.pushFormat(format=format)
+        if format == ViewerHDF5.Format.HDF5_PETSC:
+            dm.topologyView(viewer=self.viewer)
+            dm.coordinatesView(viewer=self.viewer)
+            dm.labelsView(viewer=self.viewer)
+        else:
+            dm.view(viewer=self.viewer)
+        self.viewer.popFormat()
+        self._saved_meshes.append(mesh)
+
+    def save_function_space(self, V):
+        if V in self._saved_function_spaces:
+            return
+        # Save mesh
+        self.save_mesh(V.mesh())
+        # Save function space
+        tV = V.topological
+        dm = tV.mesh().topology_dm
+        sectiondm = tV._shared_data.node_set.halo.dm
+        sd_key = get_shared_data_key(tV.mesh(), tV.ufl_element())
+        sectiondm.setName(get_sectiondm_name(*sd_key))
+        dm.sectionView(self.viewer, sectiondm)
+        h5pyfile = hdf5interface.get_h5py_file(self.viewer)
+        h5pygroup = h5pyfile.require_group(os.path.join("/topologies",
+                                                        dm.getPlexName(),
+                                                        "dms",
+                                                        sectiondm.getName(),
+                                                        PREFIX + "_function_spaces",
+                                                        V.name))
+        element_b = pickle.dumps(tV.ufl_element())
+        h5pygroup.attrs[PREFIX + "_ufl_element"] = numpy.void(element_b)
+        self._saved_function_spaces.append(V)
+
+    def save_function(self, f):
+        # Save function space
+        self.save_function_space(f.function_space())
+        # Save function
+        tf = f.topological
+        tV = tf.function_space()
+        dm = tV._mesh.topology_dm
+        sectiondm = tV._shared_data.node_set.halo.dm
+        sd_key = get_shared_data_key(tV.mesh(), tV.ufl_element())
+        sectiondm_name = get_sectiondm_name(*sd_key)
+        sectiondm.setName(sectiondm_name)
+        # Permute: Firedrake -> PETSc
+        #data = tf.dat._data
+        #vec = PETSc.Vec().createWithArray(data, size=None, bsize=tf.dat.cdim, comm=dm.comm)
+        #dmcommon.write_vec_with_petsc_orientation(tV._mesh, sd.node_set.halo.dm.getSection(), vec)
+        # Save in PETSc order
+        vec = tf.dat._vec
+        vec.setName(tf.name())
+        dm.globalVectorView(self.viewer, sectiondm, vec)
+        # Permute: PETSc -> Firedrake
+        #dmcommon.write_vec_with_petsc_orientation(tV._mesh, sd.node_set.halo.dm.getSection(), vec)
+        #tf.dat.data
+        # -- Rememeber the function space on which this function is defined
+        h5pyfile = hdf5interface.get_h5py_file(self.viewer)
+        h5pygroup = h5pyfile[os.path.join("/topologies",
+                                          dm.getPlexName(),
+                                          "dms",
+                                          sectiondm.getName(),
+                                          "vecs",
+                                          vec.getName())]
+        h5pygroup.attrs[PREFIX + "_function_space"] = f.function_space().name
+
+    def load_mesh(self, name=DEFAULT_MESH_NAME, distribution_parameters={}):
+        dist_key = hash(frozenset(distribution_parameters.items()))
+        mesh_key = (name, dist_key)
+        if mesh_key in self._meshes:
+            return self._meshes[mesh_key]["mesh"]
+        plex, sfXB = _dmload_plex(self.viewer, name)
+        mesh = Mesh(plex, name=name, distribution_parameters=distribution_parameters)
+        self._meshes[mesh_key] = {"mesh": mesh,
+                                  "sfXB": sfXB}
+        return mesh
+
+    def load_function_space(self, name, mesh_name, distribution_parameters={}):
+        dist_key = hash(frozenset(distribution_parameters.items()))
+        mesh_key = (mesh_name, dist_key)
+        fs_key = (name, ) + mesh_key
+        if fs_key in self._function_spaces:
+            return self._function_spaces[fs_key]
+        # Load mesh
+        mesh = self.load_mesh(mesh_name, distribution_parameters=distribution_parameters)
+        mesh.init()
+        # Load element
+        h5pyfile = hdf5interface.get_h5py_file(self.viewer)
+        sectiondm_name = find_sectiondm_name(h5pyfile, mesh_name, name)
+        h5pygroup = h5pyfile[os.path.join("/topologies",
+                                          mesh.topology_dm.getPlexName(),
+                                          "dms",
+                                          sectiondm_name,
+                                          PREFIX + "_function_spaces",
+                                          name)]
+        element_b = h5pygroup.attrs[PREFIX + "_ufl_element"].tobytes()
+        element = pickle.loads(element_b)
+        # Load shared data
+        tmesh = mesh.topology
+        sd_key = get_shared_data_key(tmesh, element)
+        dm = tmesh.topology_dm
+        sectiondm = PETSc.DMShell().create(comm=dm.comm)
+        sectiondm.setName(sectiondm_name)
+        sectiondm.setPointSF(dm.getPointSF())
+        section = PETSc.Section().create(comm=dm.comm)
+        section.setPermutation(tmesh._plex_renumbering)
+        sectiondm.setSection(section)
+        sfXB = self._meshes[mesh_key]["sfXB"]
+        sfXC = self._meshes[mesh_key].setdefault("sfXC",
+                                                 sfXB.compose(tmesh.sfBC) if tmesh.sfBC else sfXB)
+        gsf, lsf = dm.sectionLoad(self.viewer, sectiondm, sfXC)
+        _ = get_global_numbering(tmesh, sd_key, global_numbering=sectiondm.getSection())
+        # Construct function space
+        V = FunctionSpace(mesh, element, name=name)
+        self._function_space_datas[sd_key + mesh_key] = (sectiondm, gsf, lsf)
+        self._function_spaces[fs_key] = V
+        return V
+
+    def load_function(self, name, mesh_name=DEFAULT_MESH_NAME, distribution_parameters={}):
+        dist_key = hash(frozenset(distribution_parameters.items()))
+        mesh_key = (mesh_name, dist_key)
+        # Load function space
+        h5pyfile = hdf5interface.get_h5py_file(self.viewer)
+        # -- Rememeber the function space on which this function is defined
+        fs_name = find_function_space_name(h5pyfile, mesh_name, name)
+        V = self.load_function_space(fs_name, mesh_name, distribution_parameters=distribution_parameters)
+        # Construct function
+        f = Function(V, name=name)
+        tf = f.topological
+        tV = tf.function_space()
+        dm = tV._mesh.topology_dm
+        sectiondm = tV._shared_data.node_set.halo.dm
+        sd_key = get_shared_data_key(tV.mesh(), tV.ufl_element())
+        sectiondm.setName(get_sectiondm_name(*sd_key))
+        vec = PETSc.Vec().createWithArray(tf.dat._data, size=None, bsize=tf.dat.cdim, comm=dm.comm)
+        vec.setName(tf.name())
+        _, _, sf = self._function_space_datas[sd_key + mesh_key]
+        dm.localVectorLoad(self.viewer, sectiondm, sf, vec)
+        #dmcommon.write_vec_with_petsc_orientation(tV._mesh, sd.node_set.halo.dm.getSection(), vec)
+        #tf.dat.data
+        return f
+
+    def close(self):
+        self.viewer.destroy()
