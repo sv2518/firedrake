@@ -391,7 +391,7 @@ def rebuild_dg(element, expr):
         # domain has correct ufl cell
         expr_fiat_cell = as_fiat_cell(expr.ufl_domain().ufl_cell())
     rule = finat.quadrature.QuadratureRule(rule_pointset, weights=[1.])
-    return finat.QuadratureElement(expr_fiat_cell, None, rule=rule)
+    return finat.QuadratureElement(expr_fiat_cell, rule)
 
 
 @rebuild.register(finat.TensorFiniteElement)
