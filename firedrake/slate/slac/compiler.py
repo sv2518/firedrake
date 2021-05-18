@@ -176,23 +176,28 @@ def generate_loopy_kernel(slate_expr, tsfc_parameters=None):
     slate_loopy_name = "slate_loopy"
     (slate_loopy, ctx_g2l), output_arg = gem_to_loopy(gem_expr, var2terminal, scalar_type, slate_loopy_name)
     print(slate_loopy)
-
-    builder = LocalLoopyKernelBuilder(expression=slate_expr,
-                                      tsfc_parameters=tsfc_parameters,
-                                      slate_loopy_name=slate_loopy_name)
-    
+    print(slate_expr)
     if tsfc_parameters["optimise_slate"]:
         # here we reuse the loopy kernel and call tsfc kernels from within
         name = "slate_loopy"
+        builder = LocalLoopyKernelBuilder(expression=slate_expr,
+                                        tsfc_parameters=tsfc_parameters,
+                                        slate_loopy_name=slate_loopy_name)
         loopy_merged = merge_loopy(slate_loopy, output_arg, builder, var2terminal, name, ctx_g2l, "when_needed", slate_expr, tsfc_parameters)
     else:
         # here we generate a new kernel where the the slate loopy kernel is called from
         name = "wrap_slate_loopy"
-        loopy_merged = merge_loopy(slate_loopy, output_arg, builder, var2terminal, name, "terminals_first")
+        builder = LocalLoopyKernelBuilder(expression=slate_expr,
+                                        tsfc_parameters=tsfc_parameters,
+                                        slate_loopy_name=slate_loopy_name)
+        loopy_merged = merge_loopy(slate_loopy, output_arg, builder, var2terminal, name, ctx_g2l, "terminals_first", slate_expr, tsfc_parameters)
 
     loopy_merged = loopy.register_callable(loopy_merged, INVCallable.name, INVCallable())
     loopy_merged = loopy.register_callable(loopy_merged, SolveCallable.name, SolveCallable())
 
+    # print(loopy_merged)
+    # code = loopy.generate_code_v2(loopy_merged)
+    # print(code)
     loopykernel = op2.Kernel(loopy_merged,
                              name,
                              include_dirs=BLASLAPACK_INCLUDE.split(),
@@ -208,6 +213,7 @@ def generate_loopy_kernel(slate_expr, tsfc_parameters=None):
                        pass_layer_arg=builder.bag.needs_mesh_layers,
                        needs_cell_sizes=builder.bag.needs_cell_sizes)
 
+    builder = None
     # Cache the resulting kernel
     # Slate kernels are never split, so indicate that with None in the index slot.
     idx = tuple([None]*slate_expr.rank)
@@ -643,7 +649,7 @@ def parenthesize(arg, prec=None, parent=None):
     return "(%s)" % arg
 
 
-def gem_to_loopy(gem_expr, var2terminal, scalar_type, knl_name, out_name="output"):
+def gem_to_loopy(gem_expr, var2terminal, scalar_type, knl_name, out_name="output", matfree=False):
     """ Method encapsulating stage 2.
     Converts the gem expression dag into imperoc first, and then further into loopy.
     :return slate_loopy: 2-tuple of loopy kernel for slate operations
@@ -657,7 +663,7 @@ def gem_to_loopy(gem_expr, var2terminal, scalar_type, knl_name, out_name="output
     for var in var2terminal.keys():
         if hasattr(var, "name") and var.name not in [a.name for a in args]:
             # FIXME we should probably just have two dicts
-            if var.name.startswith("S") or var.name.startswith("A"):
+            if var.name.startswith("S") or var.name.startswith("A") or (len(var.shape)>1 and matfree):
                 t_shape = var.shape if var.shape else (1,)
                 args.append(loopy.TemporaryVariable(var.name, shape=t_shape, dtype=scalar_type, address_space=loopy.AddressSpace.LOCAL, target=loopy.CTarget()))
             else:

@@ -147,6 +147,8 @@ class TensorBase(object, metaclass=ABCMeta):
                 data = (type(op).__name__, op.decomposition, )
             elif isinstance(op, Tensor):
                 data = (op.form.signature(), )
+            elif isinstance(op, TensorShell):
+                data = (type(op).__name__, op.tensor)
             elif isinstance(op, (UnaryOp, BinaryOp)):
                 data = (type(op).__name__, )
             else:

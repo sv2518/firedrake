@@ -428,7 +428,7 @@ class LocalLoopyKernelBuilder(object):
 
         self.expression = expression
         self.tsfc_parameters = tsfc_parameters
-        self.bag = SlateWrapperBag(None)
+        self.bag = SlateWrapperBag(None, prefix="iname")
         self.kernel_counter = count()
         self.slate_loopy_name = slate_loopy_name
         self.matfree_solve_knls = []
@@ -763,7 +763,7 @@ class LocalLoopyKernelBuilder(object):
         insn = loopy.CallInstruction((slate_kernel_call_output,), call, id="slate_kernel_call")
         return insn
 
-    def generate_matfsolve_call(self, ctx, insn, expr):
+    def generate_matfsolve_call(self, ctx, insn, expr, var2terminal):
         """
             Matrix-free solve. Currently implemented as CG. WIP.
         """
@@ -773,8 +773,8 @@ class LocalLoopyKernelBuilder(object):
         # Generate args and reads
         args = []
         reads = []
-        child1, child2 = expr.children
-        reads1, reads2 = insn.expression.parameters
+        child1, child2 = expr.children  # gem
+        reads1, reads2 = insn.expression.parameters  # loopy
         # str2name = {child1.name:reads1.subscript.aggregate.name}
         str2name = {}
         def make_reads(child2, name):
@@ -784,11 +784,19 @@ class LocalLoopyKernelBuilder(object):
             # inames = {var.name for var in indices}
             return child_reads, SubArrayRef(idx_reads, pym.Subscript(var_reads, idx_reads))
 
-        child_coords, reads_coords = make_reads(child2, "coords")
+        child_coords, reads_coords = make_reads(child2, self.coordinates_arg)
         child_out, reads_out = make_reads(child2, insn.assignee_name)
         reads = [reads1, reads_out, reads_coords, reads2]
         children = [child1, child_out, child_coords, child2]
-        local_names = ["A", "output", "coords", "b"]
+
+        local_names = ["A", "output", self.coordinates_arg, "b"]
+
+        if self.bag.needs_cell_facets:
+            child_facets, reads_facets = make_reads(child2, self.cell_facets_arg)
+            reads = [reads1, reads_out, reads_coords, reads_facets, reads2]
+            children = [child1, child_out, child_coords, child_facets, child2]
+            local_names = ["A", "output", self.coordinates_arg, self.cell_facets_arg, "b"]
+
         dtype = self.tsfc_parameters["scalar_type"]
 
         for name, (child, var_reads) in zip(local_names, zip(children, reads)):
@@ -807,7 +815,8 @@ class LocalLoopyKernelBuilder(object):
         name = "mtf"+str(len(self.matfree_solve_knls))+"_cg_kernel_in_" + ctx.kernel_name  # FIXME Use UniqueNameGenerator
         stop_criterion = self.generate_code_for_stop_criterion("rkp1_norm", 0.000000001)
         shape = expr.shape
-        output_arg = loopy.GlobalArg(insn.assignee_name, dtype, shape=shape, is_output=True, is_input=True, target=loopy.CTarget())
+        output_arg = loopy.GlobalArg(insn.assignee_name, dtype, shape=shape, is_output=True, is_input=True,
+                                     target=loopy.CTarget(), dim_tags=None, strides=loopy.auto, order='C')
 
         # The last line in the loop to convergence is another WORKAROUND
         # bc the initialisation of A_on_p in the action call does not get inlined properly either
@@ -866,7 +875,7 @@ class LocalLoopyKernelBuilder(object):
                                              reads))
         
         self.matfree_solve_knls.append(knl)
-        return call, (name, knl), output_arg
+        return call, (name, knl), output_arg, ctx
 
     def generate_code_for_stop_criterion(self, var_name, stop_value):
         """ This method is workaround need since Loo.py does not support while loops yet.
@@ -950,7 +959,8 @@ class LocalLoopyKernelBuilder(object):
             # Arg for is exterior (==0)/interior (==1) facet or not
             args.append(loopy.GlobalArg(self.cell_facets_arg, shape=(self.num_facets, 2),
                                         dtype=np.int8, is_input=True, is_output=False,
-                                        target=loopy.CTarget()))
+                                        target=loopy.CTarget(),
+                                        dim_tags=None, strides=loopy.auto, order="C"))
 
             args.append(
                 loopy.TemporaryVariable(self.local_facet_array_arg,
@@ -958,7 +968,9 @@ class LocalLoopyKernelBuilder(object):
                                         dtype=np.uint32,
                                         address_space=loopy.AddressSpace.LOCAL,
                                         read_only=True,
-                                        initializer=np.arange(self.num_facets, dtype=np.uint32),))
+                                        initializer=np.arange(self.num_facets, dtype=np.uint32),
+                                        target=loopy.CTarget(),
+                                        dim_tags=None, strides=loopy.auto, order="C"))
 
         if self.bag.needs_mesh_layers:
             args.append(loopy.GlobalArg(self.layer_count, shape=(1,),
@@ -1028,6 +1040,13 @@ class LocalLoopyKernelBuilder(object):
             yield (None, None)
 
 
+    def update_bag_with_coefficients(self, coeffs, new_coeffs, name):
+        bag = self.bag.copy(name=name)
+        bag.coefficients = coeffs
+        bag.action_coefficients = new_coeffs
+        return bag
+
+
 def match_kernel_argnames(insn, code):
     # FIXME we should do this before generating the knl
     knl_name, = code.callables_table
@@ -1062,13 +1081,8 @@ class SlateWrapperBag(object):
         self.call_name_generator = UniqueNameGenerator(forced_prefix="tsfc_kernel_call_")
         self.index_creator = IndexCreator(prefix)
         self.name = name
-    
-    def update_coefficients(self, coeffs, prefix, new_coeffs):
-        self.coefficients = coeffs
-        self.action_coefficients = new_coeffs
-        self.call_name_generator(prefix)
 
-    def copy(self, prefix, name):
+    def copy(self, prefix=None, name=None):
         new = SlateWrapperBag(self.coefficients)
         new.action_coefficients = self.action_coefficients
         new.inames = self.inames
@@ -1078,16 +1092,17 @@ class SlateWrapperBag(object):
         new.needs_mesh_layers = self.needs_mesh_layers
         new.call_name_generator = self.call_name_generator
         new.index_creator = self.index_creator
-        new.index_creator.rename(prefix)
+        if prefix:
+            new.index_creator.rename(prefix)
         new.name = name
         return new
 
 
 class IndexCreator(object):
-    inames = OrderedDict()  # pym variable -> extent
     
     def __init__(self, forced_prefix):
         self.namer = UniqueNameGenerator(forced_prefix=forced_prefix)
+        self.inames = OrderedDict()  # pym variable -> extent
 
     def __call__(self, extents, namer=""):
         """Create new indices with specified extents.
