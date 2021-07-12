@@ -15,9 +15,10 @@ from pyop2.utils import as_tuple
 __all__ = ['HybridizationPC']
 
 class CheckSchurComplement(Exception):
-    def __init__(self, expr, m):
+    def __init__(self, expr, m, t):
         self.expression = expr
         self.message = m
+        self.timing = t
 
 class HybridizationPC(SCBase):
 
@@ -286,7 +287,7 @@ class HybridizationPC(SCBase):
         split_trace_op = dict(split_form(K.form))
 
         # Generate reconstruction calls
-        self._reconstruction_calls(split_mixed_op, split_trace_op, local_matfree=local_matfree, mat_type=mat_type, prefix=prefix, pc=pc)
+        # self._reconstruction_calls(split_mixed_op, split_trace_op, local_matfree=local_matfree, mat_type=mat_type, prefix=prefix, pc=pc)
 
     def _reconstruction_calls(self, split_mixed_op, split_trace_op, local_matfree=False, mat_type=None, prefix=None, pc=None):
         """This generates the reconstruction calls for the unknowns using the
@@ -398,7 +399,7 @@ class HybridizationPC(SCBase):
 
         :arg pc: a Preconditioner instance.
         """
-
+        import time
         dm = self.trace_ksp.getDM()
 
         with dmhooks.add_hooks(dm, self, appctx=self._ctx_ref):
@@ -410,7 +411,10 @@ class HybridizationPC(SCBase):
                 else:
                     acc = self.trace_solution.dat.vec_wo
                 with acc as x_trace:
+                    start_time = time.time()
                     self.trace_ksp.solve(b, x_trace)
+                    timing = time.time() - start_time
+        raise CheckSchurComplement(self.ctx, "The Schur complement.", timing)
 
     def backward_substitution(self, pc, y):
         """Perform the backwards recovery of eliminated fields.
