@@ -703,7 +703,7 @@ def update_wrapper_kernel(builder, insns, output_arg, tensor2temps, knl_list, sl
     global_args = []
     local_args = slate_loopy[builder.slate_loopy_name].temporary_variables
     for n in new_args:
-        if n.address_space==lp.AddressSpace.GLOBAL:
+        if not isinstance(n, lp.kernel.data.ValueArg) and n.address_space==lp.AddressSpace.GLOBAL:
             global_args += [n]
         else:
             local_args.update({n.name: n})
