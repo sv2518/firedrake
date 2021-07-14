@@ -429,7 +429,7 @@ def pointwise_expression_kernel(exprs, scalar_type):
     assert len(coefficients) == 0
     knl = generate(impero_c, args, scalar_type, kernel_name="expression_kernel",
                    return_increments=False)
-    return firedrake.op2.Kernel(knl, knl.name), plargs
+    return firedrake.op2.Kernel(knl, knl.name, requires_zeroed_output_arguments=True), plargs
 
 
 class dereffed(object):
