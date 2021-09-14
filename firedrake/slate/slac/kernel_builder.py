@@ -533,7 +533,20 @@ class LocalLoopyKernelBuilder(object):
             # kernel data is restructured
             if isinstance(c, tuple):  # then the coeff is coming from a mixed background
                 mixed_c, split_c = c
-                shp, = split_c.ufl_shape if split_c.ufl_shape else (1,)
+                def arg_function_spaces(coeff):
+                    return (coeff.ufl_function_space(),)
+                def shapes(coeff):
+                    shapes = OrderedDict()
+                    for i, fs in enumerate(arg_function_spaces(coeff)):
+                        shapes[i] = tuple(int(V.finat_element.space_dimension() * V.value_size)
+                                        for V in fs)
+                    return shapes
+                def shape(coeff):
+                    return tuple(sum(shapelist) for shapelist in shapes(coeff).values())
+                shp2 = shape(split_c)
+                if name == "S1":
+                    shp2 = (8,)
+                shp, = shp2 if shp2 else (1,)
                 idx = self.bag.index_creator((shp,))
                 offset_index = (pym.Sum((offset, idx[0])),)
                 c = pym.Subscript(pym.Variable(name), offset_index)
@@ -787,7 +800,7 @@ class LocalLoopyKernelBuilder(object):
         str2name.update({"A_on_x":A_on_x_name, "A_on_p":A_on_p_name})
     
         name = "mtf"+str(len(self.matfree_solve_knls))+"_cg_kernel_in_" + ctx.kernel_name  # FIXME Use UniqueNameGenerator
-        stop_criterion = self.generate_code_for_stop_criterion("rkp1_norm", 0.000000001)
+        stop_criterion = self.generate_code_for_stop_criterion("rkp1_norm", 0.00000000000000000001)
         shape = expr.shape
         corner_case = self.generate_code_for_converged_pre_iteration()
 
@@ -796,7 +809,7 @@ class LocalLoopyKernelBuilder(object):
         knl = loopy.make_function(
                 """{ [i_0,i_1,j_1,i_2,j_2,i_3,i_4,i_5,i_6,i_7,j_7,i_8,j_8,i_9,i_10,i_11,i_12,i_13,i_14,i_15,i_16,i_17,ii_3,iii_3,iiii_3, j_0]: 
                     0<=i_0<n and 0<=i_1,j_1<n and 0<=i_2,j_2<n and 0<=i_3<n and 0<=i_4<n 
-                    and 0<=i_5<n and 0<=i_6<=3*n and 0<=i_7,j_7<n and 0<=i_8,j_8<n 
+                    and 0<=i_5<n and 0<=i_6<=100*n and 0<=i_7,j_7<n and 0<=i_8,j_8<n 
                     and 0<=i_9<n and 0<=i_10<n and 0<=i_11<n and 0<=i_12<n and 0<=i_13<n
                     and 0<=i_14<n and 0<=i_15<n and 0<=i_16<n and 0<=i_17<n and 0<=j_0<n}""" ,
                 ["""
@@ -805,22 +818,22 @@ class LocalLoopyKernelBuilder(object):
                     <> r[i_3] = {A_on_x}[i_3]-{b}[i_3] {{dep=Aonx, id=residual0}}
                     <> sum_r = 0.  {{dep=residual0, id=sumr0}}
                     sum_r = sum_r + r[j_0] {{dep=sumr0, id=sumr}}
-                    <> converged = sum_r < 0.000000000000001{{dep=sumr, id=converged}}
+                    <> converged = sum_r < 0.0000000001{{dep=sumr, id=converged}}
                     p[i_4] = -r[i_4] {{dep=converged, id=projector0}}
-                    <> rk_norm = 0 {{dep=projector0, id=rk_norm0}}
+                    <> rk_norm = 0. {{dep=projector0, id=rk_norm0}}
                     rk_norm = rk_norm + r[i_5]*r[i_5] {{dep=projector0, id=rk_norm1}}
                     for i_6
                         {A_on_p}[:] = action_A_on_p({A}[:,:], p[:]) {{dep=rk_norm1, id=Aonp, inames=i_6}}
-                        <> p_on_Ap = 0 {{dep=Aonp, id=ponAp0}}
+                        <> p_on_Ap = 0. {{dep=Aonp, id=ponAp0}}
                         p_on_Ap = p_on_Ap + p[j_2]*{A_on_p}[j_2] {{dep=ponAp0, id=ponAp}}
-                        <> projector_is_zero = p_on_Ap < 0.000000000000001 {{id=zeroproj, dep=ponAp}}
+                        <> projector_is_zero = abs(p_on_Ap) < 0.00000001 {{id=zeroproj, dep=ponAp}}
                     """.format(**str2name),
                         corner_case,
                         """
                         <> alpha = rk_norm / p_on_Ap {{dep=cornercase, id=alpha}}
                         x[i_10] = x[i_10] + alpha*p[i_10] {{dep=ponAp, id=xk}}
                         r[i_11] = r[i_11] + alpha*{A_on_p}[i_11] {{dep=xk,id=rk}}
-                        <> rkp1_norm = 0 {{dep=rk, id=rkp1_norm0}}
+                        <> rkp1_norm = 0. {{dep=rk, id=rkp1_norm0}}
                         rkp1_norm = rkp1_norm + r[i_12]*r[i_12] {{dep=rkp1_norm0, id=rkp1_normk}}
                     """.format(**str2name),
                         stop_criterion,
@@ -861,7 +874,7 @@ class LocalLoopyKernelBuilder(object):
         # note that depends_on and id need to match the instructions in the kernel,
         # which uses the stop criterion
         return loopy.CInstruction("",
-                            "if (projector_is_zero|| isnan(p_on_Ap)) break;",
+                            "if (projector_is_zero) break;",
                             depends_on="zeroproj",
                             id="cornercase")
 

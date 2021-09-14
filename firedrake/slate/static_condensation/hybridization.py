@@ -14,6 +14,33 @@ from pyop2.utils import as_tuple
 
 __all__ = ['HybridizationPC']
 
+def petsctopy(petscmat):
+    n,m=petscmat.getSize()
+    aa = np.zeros((n,m))
+
+    for i in range(n):
+        for j in range(m):
+            aa[i,j] = petscmat.getValues(i,j)
+    return aa
+def plot_mixed_operator(a, name):
+    import matplotlib.pyplot as plt
+    import scipy as sc
+    fig=plt.figure()
+    c=1
+    from firedrake import assemble
+    A=assemble(a, mat_type="aij",  form_compiler_parameters={"optimise_slate": False, "replace_mul_with_action": True, "visual_debug": False}).M.handle
+    A_np=petsctopy(A)
+    print("condition number:", np.linalg.cond(A_np))
+    print("positive definite?:", np.all(np.linalg.eigvals(A_np) > 0))
+    print("eigenvalues:", np.linalg.eigvals(A_np))
+    print("symmetric?:", np.allclose(A_np, A_np.T, rtol=0.0001))
+    np.save(name+'.npy', A_np)
+    
+    plt.imshow(A_np)
+    plt.colorbar()
+    # plt.axis('off')
+    plt.savefig(name, dpi=150)
+
 class CheckSchurComplement(Exception):
     def __init__(self, expr, m):
         self.expression = expr
@@ -205,10 +232,9 @@ class HybridizationPC(SCBase):
 
         # Assemble the Schur complement operator and right-hand side
         local_matfree = PETSc.Options().getString(prefix + "local_matfree", "false") == "true"
-        if local_matfree:
-            x = K * Atilde.solve(AssembledVector(self.broken_residual), matfree=local_matfree) # rhs: we solve Ar = b and then set x=K*r
-        else:
-            x = K * Atilde.inv  * AssembledVector(self.broken_residual)
+        x = K * Atilde.inv  * AssembledVector(self.broken_residual)
+
+        # plot_mixed_operator(Atilde, "A")
 
         self.schur_rhs = Function(TraceSpace)
         if local_matfree:
@@ -219,13 +245,18 @@ class HybridizationPC(SCBase):
             x,
             tensor=self.schur_rhs,
             form_compiler_parameters=self.ctx.fc_params) # this triggers loopy compilation
+        
+        if local_matfree:
+            self.ctx.fc_params.update({"optimise_slate": True, "replace_mul_with_action": True, "visual_debug": False})
+        else:
+            self.ctx.fc_params.update({"optimise_slate": False, "replace_mul_with_action": False, "visual_debug": False})
 
         mat_type = PETSc.Options().getString(prefix + "mat_type", "aij")
 
-        if local_matfree:
-            schur_comp = K * Atilde.solve(K.T, matfree=local_matfree) # first part of schur: we solve Ay = K.T
-        else:
-            schur_comp = K * Atilde.inv * K.T
+        schur_comp = K * Atilde.inv * K.T
+
+        
+        # plot_mixed_operator(schur_comp, "schur_comp")
 
         self.S = allocate_matrix(schur_comp, bcs=trace_bcs,
                                  form_compiler_parameters=self.ctx.fc_params,
@@ -313,6 +344,8 @@ class HybridizationPC(SCBase):
         K_0 = Tensor(split_trace_op[(0, id0)])
         K_1 = Tensor(split_trace_op[(0, id1)])
 
+        plot_mixed_operator(A, "K0")
+
         # Split functions and reconstruct each bit separately
         split_residual = self.broken_residual.split()
         split_sol = self.broken_solution.split()
@@ -323,25 +356,33 @@ class HybridizationPC(SCBase):
         lambdar = AssembledVector(self.trace_solution)
 
         if not local_matfree:
+            A = Tensor(split_mixed_op[(id0, id0)])
+            K_0 = Tensor(-split_trace_op[(0, id0)])
             M = D - C * A.inv * B
             R = K_1.T - C * A.inv * K_0.T
             u_rec = M.solve(f - C * A.inv * g - R * lambdar,
                             decomposition="PartialPivLU")
             self.ctx.fc_params.update({"optimise_slate": False, "replace_mul_with_action": False, "visual_debug": False})
+            self._sub_unknown = create_assembly_callable(u_rec,
+                                                        tensor=u,
+                                                        form_compiler_parameters=self.ctx.fc_params)
+            sigma_rec = A.solve(g - B * AssembledVector(u) - K_0.T * lambdar,
+                                decomposition="PartialPivLU",
+                                matfree=local_matfree)
         else:
             self.ctx.fc_params.update({"optimise_slate": True, "replace_mul_with_action": True, "visual_debug": False})
             M = D - C * A.solve(B, matfree=True)
             R = (K_1.T - C * A.solve(K_0.T, matfree=True)) * lambdar
             rhs = f - C * A.solve(g, matfree=True) - R
             u_rec = M.solve(rhs, matfree=True)
+            self._sub_unknown = create_assembly_callable(u_rec,
+                                                        tensor=u,
+                                                        form_compiler_parameters=self.ctx.fc_params)
 
-        self._sub_unknown = create_assembly_callable(u_rec,
-                                                     tensor=u,
-                                                     form_compiler_parameters=self.ctx.fc_params)
+            sigma_rec = A.solve((g - B * AssembledVector(u) - K_0.T * lambdar),
+                                decomposition="PartialPivLU",
+                                matfree=local_matfree)
 
-        sigma_rec = A.solve(g - B * AssembledVector(u) - K_0.T * lambdar,
-                            decomposition="PartialPivLU",
-                            matfree=local_matfree)
         self._elim_unknown = create_assembly_callable(sigma_rec,
                                                       tensor=sigma,
                                                       form_compiler_parameters=self.ctx.fc_params)
@@ -392,6 +433,32 @@ class HybridizationPC(SCBase):
             # Compute the rhs for the multiplier system
             self._assemble_Srhs()
 
+        def run_cg(name, b):
+            A = np.load(name+".npy")
+            import matplotlib.pyplot as plt
+            from scipy.sparse.linalg import cg
+            from scipy.sparse import csr_matrix
+            fdat = b.dat.data
+            f = np.concatenate((fdat[0], fdat[1]))
+            print(f)
+            print(A)
+            plt.figure()
+            plt.plot(f)
+            plt.show()
+            jacobimat = np.diag(np.diag(A))
+            print(jacobimat)
+            sol = cg(csr_matrix(A), f, f)
+            print(sol)
+
+            plt.figure()
+            plt.plot(sol[0])
+            plt.show()
+
+        # run_cg("A", self.broken_residual)
+
+        # raise CheckSchurComplement(self.schur_rhs, "hi")
+        
+
     def sc_solve(self, pc):
         """Solve the condensed linear system for the
         condensed field.
@@ -411,6 +478,9 @@ class HybridizationPC(SCBase):
                     acc = self.trace_solution.dat.vec_wo
                 with acc as x_trace:
                     self.trace_ksp.solve(b, x_trace)
+        
+        # plot_mixed_operator(schur_comp, "schur_comp")
+        # raise CheckSchurComplement(self.trace_solution, "hin")
 
     def backward_substitution(self, pc, y):
         """Perform the backwards recovery of eliminated fields.
@@ -424,6 +494,10 @@ class HybridizationPC(SCBase):
         self._sub_unknown()
         # Recover the eliminated unknown
         self._elim_unknown()
+
+
+        # plot_mixed_operator(schur_comp, "schur_comp")
+        # raise CheckSchurComplement(self.broken_solution, "hi")
 
         with timed_region("HybridProject"):
             # Project the broken solution into non-broken spaces

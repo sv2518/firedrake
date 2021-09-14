@@ -142,20 +142,7 @@ def f4(W4, mymesh):
     return AssembledVector(f)
 
 
-@pytest.fixture(params=["A+A",
-                        "A-A",
-                        "A+A+A2",
-                        "A+A2+A",
-                        "A+A2-A",
-                        "A.inv",
-                        "A*A.inv",
-                        "A.inv*A",
-                        "A2*A.inv",
-                        "A.inv*A2",
-                        "A2*A.inv*A",
-                        "A+A-A2*A.inv*A",
-                        "advection",
-                        "advectionT"])
+@pytest.fixture(params=["A+A-A2*A.inv*A"])
 def expr(request, A, A2, A3, f, f2):
     if request.param == "A+A":
         return (A+A)*f
@@ -196,7 +183,12 @@ def test_new_slateoptpass(expr):
     print("Test is running for expresion " + str(expr))
     tmp = assemble(expr, form_compiler_parameters={"optimise_slate": False, "replace_mul_with_action": False, "visual_debug": False})
     tmp_opt = assemble(expr, form_compiler_parameters={"optimise_slate": True, "replace_mul_with_action": True, "visual_debug": False})
-    assert np.allclose(tmp.dat.data, tmp_opt.dat.data, atol=0.0001)
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.plot(abs(tmp_opt.dat.data-tmp.dat.data), label="opt")
+    plt.legend()
+    plt.show()
+    assert np.allclose(tmp.dat.data, tmp_opt.dat.data, rtol=0.000001)
 
 
 @pytest.fixture(params=["A[0, 0] * A[0, 2]",
@@ -220,7 +212,7 @@ def block_expr(request, A4, f4):
 def test_blocks(block_expr):
     tmp = assemble(block_expr, form_compiler_parameters={"optimise_slate": False, "replace_mul_with_action": False, "visual_debug": False})
     tmp_opt = assemble(block_expr, form_compiler_parameters={"optimise_slate": True, "replace_mul_with_action": True, "visual_debug": False})
-    assert np.allclose(tmp.dat.data, tmp_opt.dat.data, atol=0.0001)
+    assert np.allclose(tmp.dat.data, tmp_opt.dat.data, rtol=0.0001)
 
 
 def test_temporary_test_for_reallifeschur():
