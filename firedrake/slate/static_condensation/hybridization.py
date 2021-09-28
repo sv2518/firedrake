@@ -17,12 +17,12 @@ __all__ = ['HybridizationPC']
 def petsctopy(petscmat):
     n,m=petscmat.getSize()
     aa = np.zeros((n,m))
-
     for i in range(n):
         for j in range(m):
             aa[i,j] = petscmat.getValues(i,j)
     return aa
 def plot_mixed_operator(a, name):
+    print(name+"\n")
     import matplotlib.pyplot as plt
     import scipy as sc
     fig=plt.figure()
@@ -31,8 +31,9 @@ def plot_mixed_operator(a, name):
     A=assemble(a, mat_type="aij",  form_compiler_parameters={"optimise_slate": False, "replace_mul_with_action": True, "visual_debug": False}).M.handle
     A_np=petsctopy(A)
     print("condition number:", np.linalg.cond(A_np))
-    print("positive definite?:", np.all(np.linalg.eigvals(A_np) > 0))
-    print("eigenvalues:", np.linalg.eigvals(A_np))
+    print("positive definite?:", np.all(np.linalg.eigvals(A_np) >= 0))
+    print("neg definite?:", np.all(np.linalg.eigvals(A_np) <= 0))
+    # print("eigenvalues:", np.linalg.eigvals(A_np))
     print("symmetric?:", np.allclose(A_np, A_np.T, rtol=0.0001))
     np.save(name+'.npy', A_np)
     
@@ -234,7 +235,7 @@ class HybridizationPC(SCBase):
         local_matfree = PETSc.Options().getString(prefix + "local_matfree", "false") == "true"
         x = K * Atilde.inv  * AssembledVector(self.broken_residual)
 
-        # plot_mixed_operator(Atilde, "A")
+        plot_mixed_operator(Atilde, "A")
 
         self.schur_rhs = Function(TraceSpace)
         if local_matfree:
@@ -356,8 +357,6 @@ class HybridizationPC(SCBase):
         lambdar = AssembledVector(self.trace_solution)
 
         if not local_matfree:
-            A = Tensor(split_mixed_op[(id0, id0)])
-            K_0 = Tensor(-split_trace_op[(0, id0)])
             M = D - C * A.inv * B
             R = K_1.T - C * A.inv * K_0.T
             u_rec = M.solve(f - C * A.inv * g - R * lambdar,
@@ -480,7 +479,7 @@ class HybridizationPC(SCBase):
                     self.trace_ksp.solve(b, x_trace)
         
         # plot_mixed_operator(schur_comp, "schur_comp")
-        # raise CheckSchurComplement(self.trace_solution, "hin")
+        raise CheckSchurComplement(self.trace_solution, "hin")
 
     def backward_substitution(self, pc, y):
         """Perform the backwards recovery of eliminated fields.
