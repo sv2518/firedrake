@@ -453,6 +453,7 @@ class HybridizationPC(SCBase):
             plt.plot(sol[0])
             plt.show()
 
+        print("DATA", self.schur_rhs.dat.data)
         # run_cg("A", self.broken_residual)
 
         # raise CheckSchurComplement(self.schur_rhs, "hi")
@@ -479,7 +480,7 @@ class HybridizationPC(SCBase):
                     self.trace_ksp.solve(b, x_trace)
         
         # plot_mixed_operator(schur_comp, "schur_comp")
-        raise CheckSchurComplement(self.trace_solution, "hin")
+        # raise CheckSchurComplement(self.trace_solution, "hin")
 
     def backward_substitution(self, pc, y):
         """Perform the backwards recovery of eliminated fields.
@@ -496,7 +497,7 @@ class HybridizationPC(SCBase):
 
 
         # plot_mixed_operator(schur_comp, "schur_comp")
-        # raise CheckSchurComplement(self.broken_solution, "hi")
+        raise CheckSchurComplement(self.broken_solution, "hi")
 
         with timed_region("HybridProject"):
             # Project the broken solution into non-broken spaces

@@ -800,7 +800,7 @@ class LocalLoopyKernelBuilder(object):
         str2name.update({"A_on_x":A_on_x_name, "A_on_p":A_on_p_name})
     
         name = "mtf"+str(len(self.matfree_solve_knls))+"_cg_kernel_in_" + ctx.kernel_name  # FIXME Use UniqueNameGenerator
-        stop_criterion = self.generate_code_for_stop_criterion("rkp1_norm", 0.0000001)
+        stop_criterion = self.generate_code_for_stop_criterion("rkp1_norm", 0.00000000001)
         shape = expr.shape
         corner_case = self.generate_code_for_converged_pre_iteration()
 
@@ -813,12 +813,12 @@ class LocalLoopyKernelBuilder(object):
                     and 0<=i_9<n and 0<=i_10<n and 0<=i_11<n and 0<=i_12<n and 0<=i_13<n
                     and 0<=i_14<n and 0<=i_15<n and 0<=i_16<n and 0<=i_17<n and 0<=j_0<n}""" ,
                 ["""
-                    x[i_0] = {b}[i_0] {{id=x0}} 
+                    x[i_0] = -{b}[i_0] {{id=x0}} 
                     {A_on_x}[:] = action_A({A}[:,:], x[:]) {{dep=x0, id=Aonx}}
                     <> r[i_3] = {A_on_x}[i_3]-{b}[i_3] {{dep=Aonx, id=residual0}}
                     <> sum_r = 0.  {{dep=residual0, id=sumr0}}
                     sum_r = sum_r + r[j_0] {{dep=sumr0, id=sumr}}
-                    <> converged = sum_r < 0.0000001{{dep=sumr, id=converged}}
+                    <> converged = sum_r < 0.00000000001{{dep=sumr, id=converged}}
                     p[i_4] = -r[i_4] {{dep=converged, id=projector0}}
                     <> rk_norm = 0. {{dep=projector0, id=rk_norm0}}
                     rk_norm = rk_norm + r[i_5]*r[i_5] {{dep=projector0, id=rk_norm1}}
@@ -830,7 +830,7 @@ class LocalLoopyKernelBuilder(object):
                     """.format(**str2name),
                         corner_case,
                         """
-                        <> alpha = rk_norm / p_on_Ap {{dep=cornercase, id=alpha}}
+                        <> alpha = 0.01* rk_norm / p_on_Ap {{dep=cornercase, id=alpha}}
                         x[i_10] = x[i_10] + alpha*p[i_10] {{dep=ponAp, id=xk}}
                         r[i_11] = r[i_11] + alpha*{A_on_p}[i_11] {{dep=xk,id=rk}}
                         <> rkp1_norm = 0. {{dep=rk, id=rkp1_norm0}}
