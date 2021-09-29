@@ -95,6 +95,7 @@ class HybridizationPC(SCBase):
         # and schur complement systems
         self.broken_solution = Function(V_d)
         self.broken_residual = Function(V_d)
+        self.schur_rhs_temporary = Function(V_d)
         self.trace_solution = Function(TraceSpace)
         self.unbroken_solution = Function(V)
         self.unbroken_residual = Function(V)
@@ -199,10 +200,43 @@ class HybridizationPC(SCBase):
         # Make a SLATE tensor from Kform
         K = Tensor(Kform)
 
+        # The inverse in the Schur complement is again treated with a Schur complement
+        # rather than calculating Atilde.inv*broken_residual
+        # we solve Atilde.solve(broken_residual) with a Schur complement
+        split_mixed_op = dict(split_form(Atilde.form))
+        id0, id1 = (self.vidx, self.pidx)
+        A00 = Tensor(split_mixed_op[(id0, id0)])
+        A01 = Tensor(split_mixed_op[(id0, id1)])
+        A10 = Tensor(split_mixed_op[(id1, id0)])
+        A11 = Tensor(split_mixed_op[(id1, id1)])
+        broken_residual = self.broken_residual.split()
+        schur_rhs_temp = self.schur_rhs_temporary.split()
+        schur_rhs_f0 = AssembledVector(broken_residual[id0])
+        schur_rhs_f1 = AssembledVector(broken_residual[id1])
+        schur_rhs_u0 = schur_rhs_temp[id0]
+        schur_rhs_u1 = schur_rhs_temp[id1]
+
+        inner_schur = (A11 - A10 * A00.inv * A01)
+        schur_rhs_sub_unknown_expr = inner_schur.solve(schur_rhs_f1 - A10 * A00.inv * schur_rhs_f0)
+
+        self._schur_rhs_sub_unknown = functools.partial(assemble,
+                                              schur_rhs_sub_unknown_expr,
+                                              tensor=schur_rhs_u1,
+                                              form_compiler_parameters=self.ctx.fc_params,
+                                              assembly_type="residual")
+
+        schur_rhs_elim_unknown_expr = A00.solve(schur_rhs_f0 - A01 * AssembledVector(schur_rhs_u1))
+
+        self._schur_rhs_elim_unknown = functools.partial(assemble,
+                                              schur_rhs_elim_unknown_expr,
+                                              tensor=schur_rhs_u0,
+                                              form_compiler_parameters=self.ctx.fc_params,
+                                              assembly_type="residual")
+
         # Assemble the Schur complement operator and right-hand side
         self.schur_rhs = Function(TraceSpace)
         self._assemble_Srhs = functools.partial(assemble,
-                                                K * Atilde.inv * AssembledVector(self.broken_residual),
+                                                K * AssembledVector(self.schur_rhs_temporary),
                                                 tensor=self.schur_rhs,
                                                 form_compiler_parameters=self.ctx.fc_params,
                                                 assembly_type="residual")
@@ -367,6 +401,12 @@ class HybridizationPC(SCBase):
                      is_loopy_kernel=True)
 
         with PETSc.Log.Event("HybridRHS"):
+            # We assemble the unknown which is an expression
+            # of the first eliminated variable.
+            self._schur_rhs_sub_unknown()
+            # Recover the eliminated unknown
+            self._schur_rhs_elim_unknown()
+
             # Compute the rhs for the multiplier system
             self._assemble_Srhs()
 
