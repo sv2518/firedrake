@@ -26,10 +26,7 @@ import pytest
 from firedrake import *
 
 
-@pytest.mark.parametrize(("degree", "hdiv_family", "quadrilateral"),
-                         [(1, "RT", False), (1, "RTCF", True),
-                          (2, "RT", False), (2, "RTCF", True)])
-def test_slate_hybridization(degree, hdiv_family, quadrilateral):
+def setup_problem(degree, hdiv_family, quadrilateral):
     # Create a mesh
     mesh = UnitSquareMesh(6, 6, quadrilateral=quadrilateral)
     RT = FunctionSpace(mesh, hdiv_family, degree)
@@ -47,6 +44,14 @@ def test_slate_hybridization(degree, hdiv_family, quadrilateral):
     # Define the variational forms
     a = (inner(sigma, tau) - inner(u, div(tau)) + inner(u, v) + inner(div(sigma), v)) * dx
     L = inner(f, v) * dx - 42 * inner(n, tau)*ds
+    return a, L, W
+
+
+@pytest.mark.parametrize(("degree", "hdiv_family", "quadrilateral"),
+                         [(1, "RT", False), (1, "RTCF", True),
+                          (2, "RT", False), (2, "RTCF", True)])
+def test_slate_hybridization(degree, hdiv_family, quadrilateral):
+    a, L, W = setup_problem(degree, hdiv_family, quadrilateral)
 
     # Compare hybridized solution with non-hybridized
     # (Hybrid) Python preconditioner, pc_type slate.HybridizationPC
@@ -57,6 +62,43 @@ def test_slate_hybridization(degree, hdiv_family, quadrilateral):
               'pc_python_type': 'firedrake.HybridizationPC',
               'hybridization': {'ksp_type': 'preonly',
                                 'pc_type': 'lu'}}
+    solve(a == L, w, solver_parameters=params)
+    sigma_h, u_h = w.split()
+
+    # (Non-hybrid) Need to slam it with preconditioning due to the
+    # system's indefiniteness
+    w2 = Function(W)
+    solve(a == L, w2,
+          solver_parameters={'pc_type': 'fieldsplit',
+                             'pc_fieldsplit_type': 'schur',
+                             'ksp_type': 'cg',
+                             'ksp_rtol': 1e-14,
+                             'pc_fieldsplit_schur_fact_type': 'FULL',
+                             'fieldsplit_0_ksp_type': 'cg',
+                             'fieldsplit_1_ksp_type': 'cg'})
+    nh_sigma, nh_u = w2.split()
+
+    # Return the L2 error
+    sigma_err = errornorm(sigma_h, nh_sigma)
+    u_err = errornorm(u_h, nh_u)
+
+    assert sigma_err < 1e-11
+    assert u_err < 1e-11
+
+
+def test_slate_hybridization_nested_schur():
+    a, L, W = setup_problem(1, "RT", False)
+
+    # Compare hybridized solution with non-hybridized
+    # (Hybrid) Python preconditioner, pc_type slate.HybridizationPC
+    w = Function(W)
+    params = {'mat_type': 'matfree',
+              'ksp_type': 'preonly',
+              'pc_type': 'python',
+              'pc_python_type': 'firedrake.HybridizationPC',
+              'hybridization': {'ksp_type': 'preonly',
+                                'pc_type': 'lu',
+                                'nested_schur': 'true'}}
     solve(a == L, w, solver_parameters=params)
     sigma_h, u_h = w.split()
 
