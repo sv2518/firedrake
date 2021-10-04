@@ -149,6 +149,7 @@ def _drop_double_transpose(expr, self):
 @_drop_double_transpose.register(Tensor)
 @_drop_double_transpose.register(AssembledVector)
 @_drop_double_transpose.register(Block)
+@_drop_double_transpose.register(Action)
 def _drop_double_transpose_terminals(expr, self):
     """Terminal expression is encountered."""
     return expr
@@ -198,10 +199,11 @@ def _push_mul_tensor(expr, self, state):
         else:
             return expr
     else:
-        raise NotImplementedError("Actions in Slate are not yet supported.")
+        return Action(expr, state.coeff, state.pick_op)
 
 
 @_push_mul.register(AssembledVector)
+@_push_mul.register(Action)
 def _push_mul_vector(expr, self, state):
     """Do not push into AssembledVectors."""
     return expr
@@ -220,8 +222,8 @@ def _push_mul_inverse(expr, self, state):
     with a coefficient into a Solve via A.inv*b = A.solve(b)
     or b*A^{-1}= (A.T.inv*b.T).T = A.T.solve(b.T).T ."""
     child, = expr.children
-    return (Solve(child, state.coeff) if state.pick_op
-            else Transpose(Solve(Transpose(child), Transpose(state.coeff))))
+    return (Solve(child, state.coeff, matfree=self.action) if state.pick_op
+            else Transpose(Solve(Transpose(child), Transpose(state.coeff), matfree=self.action)))
 
 
 @_push_mul.register(Transpose)
@@ -275,7 +277,7 @@ def _push_mul_solve(expr, self, state):
         mat = Transpose(expr.children[state.pick_op])
         swapped_op = Transpose(expr.children[flip(state.pick_op)])
         new_rhs = Transpose(state.coeff)
-        pushed_child = self(Solve(mat, new_rhs), ActionBag(None, flip(state.pick_op)))
+        pushed_child = self(Solve(mat, new_rhs, matfree=expr.is_matfree), ActionBag(None, flip(state.pick_op)))
         return Transpose(self(swapped_op, ActionBag(pushed_child, flip(state.pick_op))))
     else:
         """
@@ -287,7 +289,7 @@ def _push_mul_solve(expr, self, state):
         """
         mat, rhs = expr.children
         return (expr if (rhs.rank == 1 and state.coeff)
-                else Solve(mat, self(self(rhs, state), state)))
+                else Solve(mat, self(self(rhs, state), state), matfree=expr.is_matfree))
 
 
 @_push_mul.register(Mul)
