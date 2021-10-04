@@ -29,7 +29,7 @@ def plot_mixed_operator(a, name):
     fig=plt.figure()
     c=1
     from firedrake import assemble
-    A=assemble(a, mat_type="aij",  form_compiler_parameters={"optimise_slate": False, "replace_mul_with_action": True, "visual_debug": False}).M.handle
+    A=assemble(a, mat_type="aij",  form_compiler_parameters={"slate_compiler":{"optimise": False, "replace_mul": False}}).M.handle
     A_np=petsctopy(A)
     print("condition number:", np.linalg.cond(A_np))
     print("positive definite?:", np.all(np.linalg.eigvals(A_np) >= 0))
@@ -71,10 +71,12 @@ class HybridizationPC(SCBase):
         """
         from firedrake import (FunctionSpace, Function, Constant,
                                TrialFunction, TrialFunctions, TestFunction,
-                               DirichletBC, assemble)
+                               DirichletBC)
         from firedrake.assemble import allocate_matrix
         from firedrake.formmanipulation import split_form
         from ufl.algorithms.replace import replace
+        from firedrake.assemble import (allocate_matrix,
+                                        create_assembly_callable)
 
         # Extract the problem context
         prefix = pc.getOptionsPrefix() + "hybridization_"
@@ -245,6 +247,8 @@ class HybridizationPC(SCBase):
         K0 = Tensor(split_trace_op[(0, id0)])
         K1 = Tensor(split_trace_op[(0, id1)])
         list_split_trace_ops = [K0, K1]
+        # Assemble the Schur complement operator and right-hand side
+        local_matfree = PETSc.Options().getString(prefix + "local_matfree", "false") == "true"
 
         # Build schur complement operator and right hand side
         nested = (prefix + "nested_schur" in PETSc.Options().getAll().keys()
@@ -252,16 +256,14 @@ class HybridizationPC(SCBase):
         schur_rhs, schur_comp = self.build_schur(Atilde, K, list_split_mixed_ops,
                                                  list_split_trace_ops, nested=nested)
 
-        # Assemble the Schur complement operator and right-hand side
-        local_matfree = PETSc.Options().getString(prefix + "local_matfree", "false") == "true"
 
         plot_mixed_operator(Atilde, "A")
 
         self.schur_rhs = Function(TraceSpace)
         if local_matfree:
-            self.ctx.fc_params.update({"optimise_slate": True, "replace_mul_with_action": True, "visual_debug": False})
+            self.ctx.fc_params.update({"slate_compiler":{"optimise": False, "replace_mul": False}})
         else:
-            self.ctx.fc_params.update({"optimise_slate": False, "replace_mul_with_action": False, "visual_debug": False})
+            self.ctx.fc_params.update({"slate_compiler":{"optimise": False, "replace_mul": False}})
         self._assemble_Srhs = create_assembly_callable(
             schur_rhs,
             tensor=self.schur_rhs,
@@ -281,7 +283,7 @@ class HybridizationPC(SCBase):
                                                     form_compiler_parameters=self.ctx.fc_params,
                                                     mat_type=mat_type) 
 
-        with timed_region("HybridOperatorAssembly"):
+        with PETSc.Log.Event("HybridOperatorAssembly"):
             self._assemble_S()
 
         Smat = self.S.petscmat
@@ -383,7 +385,7 @@ class HybridizationPC(SCBase):
             R = K_1.T - C * A.inv * K_0.T
             u_rec = M.solve(f - C * A.inv * g - R * lambdar,
                             decomposition="PartialPivLU")
-            self.ctx.fc_params.update({"optimise_slate": False, "replace_mul_with_action": False, "visual_debug": False})
+            self.ctx.fc_params.update({"slate_compiler":{"optimise": False, "replace_mul": False}})
             self._sub_unknown = create_assembly_callable(u_rec,
                                                         tensor=u,
                                                         form_compiler_parameters=self.ctx.fc_params)
@@ -391,14 +393,17 @@ class HybridizationPC(SCBase):
                                 decomposition="PartialPivLU",
                                 matfree=local_matfree)
         else:
-            self.ctx.fc_params.update({"optimise_slate": True, "replace_mul_with_action": True, "visual_debug": False})
-            M = D - C * A.solve(B, matfree=True)
-            R = (K_1.T - C * A.solve(K_0.T, matfree=True)) * lambdar
-            rhs = f - C * A.solve(g, matfree=True) - R
-            u_rec = M.solve(rhs, matfree=True)
+            self.ctx.fc_params.update({"slate_compiler":{"optimise": True, "replace_mul": True}})
+            M = D - C * A.inv * B
+            R = K_1.T - C * A.inv * K_0.T
+            u_rec = M.solve(f - C * A.inv * g - R * lambdar,
+                            decomposition="PartialPivLU")
             self._sub_unknown = create_assembly_callable(u_rec,
                                                         tensor=u,
                                                         form_compiler_parameters=self.ctx.fc_params)
+            sigma_rec = A.solve(g - B * AssembledVector(u) - K_0.T * lambdar,
+                                decomposition="PartialPivLU",
+                                matfree=local_matfree)
 
             sigma_rec = A.solve((g - B * AssembledVector(u) - K_0.T * lambdar),
                                 decomposition="PartialPivLU",
@@ -435,7 +440,9 @@ class HybridizationPC(SCBase):
                                 AssembledVector(broken_residual[self.pidx])]
 
             # inner schur complement
-            S = (A11 - A10 * A00.inv * A01)
+            S = (A10 * A00.inv * A01)
+            plot_mixed_operator(A00, "schur_A")
+            plot_mixed_operator(S, "inner_schur")
             # K * block1
             K_Ainv_block1 = [K0, -K0 * A00.inv * A01 + K1]
             # K * block1 * block2
@@ -564,7 +571,7 @@ class HybridizationPC(SCBase):
         # plot_mixed_operator(schur_comp, "schur_comp")
         raise CheckSchurComplement(self.broken_solution, "hi")
 
-        with timed_region("HybridProject"):
+        with PETSc.Log.Event("HybridProject"):
             # Project the broken solution into non-broken spaces
             broken_pressure = self.broken_solution.split()[self.pidx]
             unbroken_pressure = self.unbroken_solution.split()[self.pidx]
