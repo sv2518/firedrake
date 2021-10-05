@@ -250,11 +250,16 @@ class HybridizationPC(SCBase):
         # Assemble the Schur complement operator and right-hand side
         local_matfree = PETSc.Options().getString(prefix + "local_matfree", "false") == "true"
 
+        # Get the schur complement approximation
+        test, trial = A11.arguments()
+        schur_approx = self.get_user_schur_approx(pc, test, trial)
+
         # Build schur complement operator and right hand side
         nested = (prefix + "nested_schur" in PETSc.Options().getAll().keys()
                   and PETSc.Options().getString(prefix + "nested_schur", "true") == 'true')
         schur_rhs, schur_comp = self.build_schur(Atilde, K, list_split_mixed_ops,
-                                                 list_split_trace_ops, nested=nested)
+                                                 list_split_trace_ops, nested=nested,
+                                                 schur_approx=schur_approx)
 
 
         plot_mixed_operator(Atilde, "A")
@@ -328,9 +333,9 @@ class HybridizationPC(SCBase):
             trace_ksp.setFromOptions()
 
         # Generate reconstruction calls
-        self._reconstruction_calls(list_split_mixed_ops, list_split_trace_ops, local_matfree=local_matfree, mat_type=mat_type, prefix=prefix, pc=pc)
+        self._reconstruction_calls(list_split_mixed_ops, list_split_trace_ops, local_matfree=local_matfree, mat_type=mat_type, prefix=prefix, schur_approx=None)
 
-    def _reconstruction_calls(self, list_split_mixed_ops, list_split_trace_ops, local_matfree=False, mat_type=None, prefix=None, pc=None):
+    def _reconstruction_calls(self, list_split_mixed_ops, list_split_trace_ops, local_matfree=False, mat_type=None, prefix=None, schur_approx=None):
         """This generates the reconstruction calls for the unknowns using the
         Lagrange multipliers.
 
@@ -362,58 +367,29 @@ class HybridizationPC(SCBase):
         u = split_sol[id1]
         lambdar = AssembledVector(self.trace_solution)
 
-        # M = D - C * A.inv * B
-        # R = K_1.T - C * A.inv * K_0.T
-        # u_rec = M.solve(f - C * A.inv * g - R * lambdar,
-        #                 decomposition="PartialPivLU")
-        # self._sub_unknown = functools.partial(assemble,
-        #                                       u_rec,
-        #                                       tensor=u,
-        #                                       form_compiler_parameters=self.ctx.fc_params,
-        #                                       assembly_type="residual")
+        schur = D - C * A.inv * B
+        schur = schur_approx.inv * schur if schur_approx else schur
+        R = K_1.T - C * A.inv * K_0.T
+        rhs = f - C * A.inv * g - R * lambdar
+        rhs = schur_approx.inv * rhs if schur_approx else rhs
 
-        # sigma_rec = A.solve(g - B * AssembledVector(u) - K_0.T * lambdar,
-        #                     decomposition="PartialPivLU")
-        # self._elim_unknown = functools.partial(assemble,
-        #                                        sigma_rec,
-        #                                        tensor=sigma,
-        #                                        form_compiler_parameters=self.ctx.fc_params,
-        #                                        assembly_type="residual")
 
-        if not local_matfree:
-            M = D - C * A.inv * B
-            R = K_1.T - C * A.inv * K_0.T
-            u_rec = M.solve(f - C * A.inv * g - R * lambdar,
+        u_rec = schur.solve(rhs, decomposition="PartialPivLU")
+        self._sub_unknown = functools.partial(assemble,
+                                              u_rec,
+                                              tensor=u,
+                                              form_compiler_parameters=self.ctx.fc_params,
+                                              assembly_type="residual")
+
+        sigma_rec = A.solve(g - B * AssembledVector(u) - K_0.T * lambdar,
                             decomposition="PartialPivLU")
-            self.ctx.fc_params.update({"slate_compiler":{"optimise": False, "replace_mul": False}})
-            self._sub_unknown = create_assembly_callable(u_rec,
-                                                        tensor=u,
-                                                        form_compiler_parameters=self.ctx.fc_params)
-            sigma_rec = A.solve(g - B * AssembledVector(u) - K_0.T * lambdar,
-                                decomposition="PartialPivLU",
-                                matfree=local_matfree)
-        else:
-            self.ctx.fc_params.update({"slate_compiler":{"optimise": True, "replace_mul": True}})
-            M = D - C * A.inv * B
-            R = K_1.T - C * A.inv * K_0.T
-            u_rec = M.solve(f - C * A.inv * g - R * lambdar,
-                            decomposition="PartialPivLU")
-            self._sub_unknown = create_assembly_callable(u_rec,
-                                                        tensor=u,
-                                                        form_compiler_parameters=self.ctx.fc_params)
-            sigma_rec = A.solve(g - B * AssembledVector(u) - K_0.T * lambdar,
-                                decomposition="PartialPivLU",
-                                matfree=local_matfree)
+        self._elim_unknown = functools.partial(assemble,
+                                               sigma_rec,
+                                               tensor=sigma,
+                                               form_compiler_parameters=self.ctx.fc_params,
+                                               assembly_type="residual")
 
-            sigma_rec = A.solve((g - B * AssembledVector(u) - K_0.T * lambdar),
-                                decomposition="PartialPivLU",
-                                matfree=local_matfree)
-
-        self._elim_unknown = create_assembly_callable(sigma_rec,
-                                                      tensor=sigma,
-                                                      form_compiler_parameters=self.ctx.fc_params)
-
-    def build_schur(self, Atilde, K, list_split_mixed_ops, list_split_trace_ops, nested=True):
+    def build_schur(self, Atilde, K, list_split_mixed_ops, list_split_trace_ops, nested=False, schur_approx=None):
         """The Schur complement in the operators of the trace solve contains
         the inverse on a mixed system.  Users may want this inverse to be treated
         with another schur complement.
@@ -440,9 +416,9 @@ class HybridizationPC(SCBase):
                                 AssembledVector(broken_residual[self.pidx])]
 
             # inner schur complement
-            S = (A10 * A00.inv * A01)
-            plot_mixed_operator(A00, "schur_A")
-            plot_mixed_operator(S, "inner_schur")
+            S = (A11 - A10 * A00.inv * A01)
+            # preconditioning
+            S = schur_approx.inv * S if schur_approx else S
             # K * block1
             K_Ainv_block1 = [K0, -K0 * A00.inv * A01 + K1]
             # K * block1 * block2
@@ -457,6 +433,25 @@ class HybridizationPC(SCBase):
             schur_rhs = K * Atilde.inv * AssembledVector(self.broken_residual)
             schur_comp = K * Atilde.inv * K.T
         return schur_rhs, schur_comp
+
+    def get_user_schur_approx(self, pc, test, trial):
+        """Retrieve a user-defined AuxiliaryOperator from the PETSc Options,
+        which is an approximation to the Schur complement and its inverse is used
+        to precondition the local solve in the reconstruction calls (e.g.).
+        """
+        prefix_schur = pc.getOptionsPrefix() + "hybridization_approx_schur_"
+        sentinel = object()
+        usercode = PETSc.Options().getString(prefix_schur + 'pc_python_type', default=sentinel)
+
+        if usercode != sentinel:
+            (modname, funname) = usercode.rsplit('.', 1)
+            mod = __import__(modname)
+            fun = getattr(mod, funname)
+            if isinstance(fun, type):
+                fun = fun()
+            return Tensor(fun.form(pc, test, trial)[0])
+        else:
+            return None
 
     @PETSc.Log.EventDecorator("HybridUpdate")
     def update(self, pc):
