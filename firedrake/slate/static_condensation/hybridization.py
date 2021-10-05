@@ -9,10 +9,10 @@ from firedrake.slate.static_condensation.sc_base import SCBase
 from firedrake.matrix_free.operators import ImplicitMatrixContext
 from firedrake.petsc import PETSc
 from firedrake.parloops import par_loop, READ, INC
-from firedrake.slate.slate import Tensor, AssembledVector
+from firedrake.slate.slate import DiagonalTensor, Tensor, AssembledVector
 from pyop2.utils import as_tuple
 from firedrake.formmanipulation import split_form
-
+from firedrake.parameters import parameters
 
 __all__ = ['HybridizationPC']
 
@@ -199,6 +199,7 @@ class HybridizationPC(SCBase):
         # Make a SLATE tensor from Kform
         K = Tensor(Kform)
 
+        # Build schur complement operator and right hand side
         self.schur_builder = SchurComplementBuilder(prefix, Atilde, K, pc, self.vidx, self.pidx)
         schur_rhs, schur_comp = self.schur_builder.build_schur(self.broken_residual)
 
@@ -289,7 +290,6 @@ class HybridizationPC(SCBase):
         K_0, K_1 = self.schur_builder.list_split_trace_ops
         Ahat = self.schur_builder.A00_inv_hat
         S = self.schur_builder.inner_S
-         
 
         # Split functions and reconstruct each bit separately
         split_residual = self.broken_residual.split()
@@ -302,6 +302,14 @@ class HybridizationPC(SCBase):
 
         R = K_1.T - C * Ahat * K_0.T
         rhs = f - C * Ahat * g - R * lambdar
+        if self.schur_builder.schur_approx or self.schur_builder.jacobi_S:
+            Shat = self.schur_builder.inner_S_approx_inv_hat
+            if self.schur_builder.preonly_S:
+                S = Shat
+            else:
+                S = Shat * S
+                rhs = Shat * rhs
+
         u_rec = S.solve(rhs, decomposition="PartialPivLU")
         self._sub_unknown = functools.partial(assemble,
                                               u_rec,
@@ -392,7 +400,8 @@ class HybridizationPC(SCBase):
 
         # We assemble the unknown which is an expression
         # of the first eliminated variable.
-        self._sub_unknown()
+        with PETSc.Log.Event("RecoverFirstElim"):
+            self._sub_unknown()
         # Recover the eliminated unknown
         self._elim_unknown()
 
@@ -427,7 +436,6 @@ class HybridizationPC(SCBase):
             viewer.printfASCII("Locally reconstructing solutions.\n")
             viewer.printfASCII("Projecting broken flux into HDiv space.\n")
 
-
     def getSchurComplementBuilder(self):
         return self.schur_builder
 
@@ -435,20 +443,72 @@ class HybridizationPC(SCBase):
 class SchurComplementBuilder(object):
 
     """A Slate-based Schur complement expression builder. The expression is
-    used in the trace system solve and parts of it in the reconstruction
-    calls of the other two variables of the hybridised system.
-    How the Schur complement if constructed, and in particular how the local inverse of the 
-    mixed matrix is built, is controlled with PETSc options. All corresponding PETSc options
-    start with `hybridization_lmi', where `lmi' is short for `local mixed inverse'.
-    The following option sets are valid together with the usual set of hybridisation options:
-    
+       used in the trace system solve and parts of it in the reconstruction
+       calls of the other two variables of the hybridised system.
+       How the Schur complement if constructed, and in particular how the local inverse of the
+       mixed matrix is built, is controlled with PETSc options. All corresponding PETSc options
+       start with `hybridization_lmi', where `lmi' is short for `local mixed inverse'.
+       The following option sets are valid together with the usual set of hybridisation options:
+
         {'lmi': {'ksp_type': 'preonly',
-                'pc_type': 'fieldsplit',
-                'fieldsplit_type': 'schur'}}
+                 'pc_type': 'fieldsplit',
+                 'fieldsplit_type': 'schur'}}
         --> A Schur complement is requested for the mixed matrix inverse which appears inside the
             Schur complement of the trace system solve. The Schur complements are then nested.
             For details see defition of <build_schur>. No fieldsplit options are set so all
             local inverses are calculated explicitly.
+
+        {'lmi': {'ksp_type': 'preonly',
+                'pc_type': 'fieldsplit',
+                'fieldsplit_type': 'schur',
+                'fieldsplit_schur_fact_type': 'diag'}}
+        --> The requested Schur complement for the mixed matrix inverse is approximated with
+            only the block-diagonal part of the Schur decomposition.
+            For details see defition of <build_schur>.
+
+        'lmi': {'ksp_type': 'preonly',
+                'pc_type': 'fieldsplit',
+                'fieldsplit_type': 'schur',
+                'fieldsplit_1': {'ksp_type': 'default',
+                                 'pc_type': 'python',
+                                 'pc_python_type': __name__ + '.DGLaplacian'}}
+        --> The inverse of the Schur complement inside the Schur decomposition of the mixed matrix inverse
+            is approximated by a default solver (LU in the matrix-explicit case) which is preconditioned
+            by a user-defined operator, e.g. a DG Laplacian, see <_build_inner_S_inv>.
+            So P_S * S * x = P_S * b.
+
+        'lmi': {'ksp_type': 'preonly',
+                'pc_type': 'fieldsplit',
+                'fieldsplit_type': 'schur',
+                'fieldsplit_1': {'ksp_type': 'default',
+                                 'pc_type': 'python',
+                                 'pc_python_type': __name__ + '.DGLaplacian',
+                                 'aux_ksp_type': 'preonly'}
+                                 'aux_pc_type': 'jacobi'}}}}
+        --> The inverse of the Schur complement inside the Schur decomposition of the mixed matrix inverse
+            is approximated by a default solver (LU in the matrix-explicit case) which is preconditioned
+            by a user-defined operator, e.g. a DG Laplacian. The inverse of the preconditioning matrix is
+            approximated through the inverse of only the diagonal of the provided operator, see
+             <_build_Sapprox_inv>. So diag(P_S).inv * S * x = diag(P_S).inv * b.
+
+        'lmi': {'ksp_type': 'preonly',
+                'pc_type': 'fieldsplit',
+                'fieldsplit_type': 'schur',
+                'fieldsplit_0': {'ksp_type': 'default',
+                                 'pc_type': 'jacobi'}
+        --> The inverse of the A00 block of the mixed matrix is approximated by a default solver
+            (LU in the matrix-explicit case) which is preconditioned by the diagonal matrix of A00,
+            see <_build_A00_inv>. So diag(A00).inv * A00 * x = diag(A00).inv * b.
+
+        'lmi': {'ksp_type': 'preonly',
+                'pc_type': 'fieldsplit',
+                'fieldsplit_type': 'None',
+                'fieldsplit_0':  ...
+                'fieldsplit_1':  ...
+        --> All the options for fieldsplit_* are still valid if 'fieldsplit_type': 'None'. In this case
+            the mixed matrix inverse which appears inside the Schur complement of the trace system solve
+            is calculated explicitly, but the local inverses of A00 and the Schur complement
+            in the reconstructions calls are still treated according to the options in fieldsplit_*.
     """
 
     def __init__(self, prefix, Atilde, K, pc, vidx, pidx):
@@ -461,11 +521,12 @@ class SchurComplementBuilder(object):
         self.prefix = prefix + "lmi_"
 
         # prefixes
-        self._retrieve_options()
+        self._retrieve_options(pc)
 
         # build all required inverses
         self.A00_inv_hat = self._build_A00_inv()
         self.inner_S = self._build_inner_S()
+        self.inner_S_approx_inv_hat = self._build_Sapprox_inv()
         self.inner_S_inv_hat = self._build_inner_S_inv()
 
     def _split_mixed_operator(self):
@@ -482,35 +543,103 @@ class SchurComplementBuilder(object):
         K1 = Tensor(split_trace_op[(0, id1)])
         self.list_split_trace_ops = [K0, K1]
 
-    def _retrieve_options(self):
+    def _retrieve_options(self, pc):
         get_option = lambda key: PETSc.Options(self.prefix).getString(key, default="")
 
         # Get options for Schur complement decomposition
-        self.nested = (get_option("ksp_type") == "preonly" and
-                    get_option("pc_type") == "fieldsplit" and
-                    get_option("fieldsplit_type") == "schur")
+        self.nested = (get_option("ksp_type") == "preonly"
+                       and get_option("pc_type") == "fieldsplit"
+                       and get_option("fieldsplit_type") == "schur")
 
+        # Get preconditioning options for local solvers
+        # Note Shat == preconditioner to inner S
+        fs0, fs1 = ("fieldsplit_"+str(idx) for idx in (self.vidx, self.pidx))
+        self.preonly_A00 = get_option(fs0+"_ksp_type") == "preonly"
+        self.jacobi_A00 = get_option(fs0+"_pc_type") == "jacobi"
+
+        # get user supplied operator
+        self.preonly_S = get_option(fs1+"_ksp_type") == "preonly"
+        self.jacobi_S = get_option(fs1+"_pc_type") == "jacobi"
+        self.schur_approx = (self._retrieve_user_S_approx(pc, get_option(fs1+"_pc_python_type"))
+                             if get_option(fs1+"_pc_type") == "python"
+                             else None)
+        self.preonly_Shat = get_option(fs1+"_aux_ksp_type") == "preonly"
+        self.jacobi_Shat = get_option(fs1+"_aux_pc_type") == "jacobi"
+
+        if self.jacobi_Shat or self.jacobi_A00:
+            assert parameters["slate_compiler"]["optimise"], "Local systems should only get preconditioned with \
+                                                              a preconditioning matrix if the Slate optimiser replaces \
+                                                              inverses by solves "
+        self.flip_sign = get_option(fs1+"_scaling") == "-1"
 
     def _build_inner_S(self):
         """Build the inner Schur complement."""
         _, A01, A10, A11 = self.list_split_mixed_ops
         return A11 - A10 * self.A00_inv_hat * A01
 
-    def inv(self, A):
+    def inv(self, A, P, prec, preonly=False):
         """ Calculates the inverse of an operator A.
+            The inverse is potentially approximated through a solve
+            which is potentially preconditioned with pc
+            if prec is True.
+            The inverse of A may be just approximated with the inverse of P
+            if prec and replace.
         """
-        return A.inv
+        return (P if prec and preonly else
+                (P*A).inv * P if prec else
+                A.inv)
 
     def _build_inner_S_inv(self):
         """ Calculates the inverse of the schur complement.
+            The inverse is potentially approximated through a solve
+            which is potentially preconditioned with pc.
         """
-        return self.inv(self.inner_S)
+        A = -self.inner_S if self.flip_sign else self.inner_S
+        P = -self.inner_S_approx_inv_hat if self.flip_sign else self.inner_S_approx_inv_hat
+        prec = bool(self.schur_approx) or self.jacobi_S
+        Shatinv = self.inv(A, P, prec, self.preonly_S) if self.schur_approx or not self.jacobi_S else self.inner_S_approx_inv_hat
+        return -Shatinv if self.flip_sign else Shatinv
+
+    def _build_Sapprox_inv(self):
+        """ Calculates the inverse of the schur complement approximation (!) provided by the user.
+            The inverse is potentially approximated through a solve
+            which is potentially preconditioned with jacobi.
+        """
+        if self.schur_approx:
+            A = self.schur_approx if self.flip_sign else self.schur_approx
+        elif self.jacobi_S:
+            A = self.inner_S
+        else:
+            return None
+        P = DiagonalTensor(A).inv
+        prec = self.schur_approx or self.jacobi_S
+        return self.inv(A, P, prec, self.preonly_S)
 
     def _build_A00_inv(self):
         """ Calculates the inverse of A00, the (0,0)-block of the mixed matrix Atilde.
+            The inverse is potentially approximared through a solve
+            which is potentially preconditioned with jacobi.
         """
         A, _, _, _ = self.list_split_mixed_ops
-        return self.inv(A)
+        P = DiagonalTensor(A).inv
+        return self.inv(A, P, self.jacobi_A00, self.preonly_A00)
+
+    def _retrieve_user_S_approx(self, pc, usercode):
+        """Retrieve a user-defined AuxiliaryOperator from the PETSc Options,
+        which is an approximation to the Schur complement and its inverse is used
+        to precondition the local solve in the reconstruction calls (e.g.).
+        """
+        _, _, _, A11 = self.list_split_mixed_ops
+        test, trial = A11.arguments()
+        if usercode != "":
+            (modname, funname) = usercode.rsplit('.', 1)
+            mod = __import__(modname)
+            fun = getattr(mod, funname)
+            if isinstance(fun, type):
+                fun = fun()
+            return Tensor(fun.form(pc, test, trial)[0])
+        else:
+            return None
 
     def build_schur(self, rhs):
         """The Schur complement in the operators of the trace solve contains
@@ -531,11 +660,11 @@ class SchurComplementBuilder(object):
         """
 
         if self.nested:
-            _, A01, A10, _ = self.list_split_mixed_ops
+            A00, A01, A10, A11 = self.list_split_mixed_ops
             K0, K1 = self.list_split_trace_ops
             broken_residual = rhs.split()
             R = [AssembledVector(broken_residual[self.vidx]),
-                AssembledVector(broken_residual[self.pidx])]
+                 AssembledVector(broken_residual[self.pidx])]
             # K * block1
             K_Ainv_block1 = [K0, -K0 * self.A00_inv_hat * A01 + K1]
             # K * block1 * block2
