@@ -344,8 +344,7 @@ class HybridizationPC(SCBase):
         :arg split_trace_op: a ``dict`` of split forms that make up the trace
                              contribution in the hybridized mixed system.
         """
-        from firedrake.assemble import (allocate_matrix,
-                                        create_assembly_callable)
+        from firedrake.assemble import assemble
 
         # We always eliminate the velocity block first
         id0, id1 = (self.vidx, self.pidx)
@@ -519,11 +518,6 @@ class HybridizationPC(SCBase):
             plt.figure()
             plt.plot(sol[0])
             plt.show()
-
-        print("DATA", self.schur_rhs.dat.data)
-        # run_cg("A", self.broken_residual)
-
-        # raise CheckSchurComplement(self.schur_rhs, "hi")
         
 
     def sc_solve(self, pc):
@@ -545,9 +539,6 @@ class HybridizationPC(SCBase):
                     acc = self.trace_solution.dat.vec_wo
                 with acc as x_trace:
                     self.trace_ksp.solve(b, x_trace)
-        
-        # plot_mixed_operator(schur_comp, "schur_comp")
-        # raise CheckSchurComplement(self.trace_solution, "hin")
 
     def backward_substitution(self, pc, y):
         """Perform the backwards recovery of eliminated fields.
@@ -564,7 +555,6 @@ class HybridizationPC(SCBase):
 
 
         # plot_mixed_operator(schur_comp, "schur_comp")
-        raise CheckSchurComplement(self.broken_solution, "hi")
 
         with PETSc.Log.Event("HybridProject"):
             # Project the broken solution into non-broken spaces
