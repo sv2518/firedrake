@@ -976,7 +976,6 @@ class Reciprocal(UnaryOp):
         return "(%s).reciprocal" % tensor
 
 
-
 class Inverse(UnaryOp):
     """An abstract Slate class representing the inverse of a tensor.
 
