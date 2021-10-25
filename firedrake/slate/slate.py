@@ -1300,6 +1300,7 @@ class DiagonalTensor(UnaryOp):
         tensor, = self.operands
         return "(%s).diag" % tensor
 
+
 def space_equivalence(A, B):
     """Checks that two function spaces are equivalent.
 
