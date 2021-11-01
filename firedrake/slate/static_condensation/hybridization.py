@@ -12,6 +12,7 @@ from firedrake.parloops import par_loop, READ, INC
 from firedrake.slate.slate import DiagonalTensor, Tensor, AssembledVector
 from pyop2.utils import as_tuple
 from firedrake.formmanipulation import split_form
+from typing import Iterable
 
 from firedrake.parameters import parameters
 
@@ -552,17 +553,23 @@ class SchurComplementBuilder(object):
         K1 = Tensor(split_trace_op[(0, id1)])
         self.list_split_trace_ops = [K0, K1]
 
+    def _check_options(self, valid: Iterable[tuple[str, set[str]]]):
+        default = object()
+        opts = PETSc.Options(self.prefix)
+        for key, supported in valid:
+            value = opts.getString(key, default=default)
+            if value is not default and value not in supported:
+                raise ValueError(f"Unsupported value ({value}) for '{self.prefix + key}'. "
+                                 f"Should be one of {supported}")
+
     def _retrieve_options(self, pc):
         get_option = lambda key: PETSc.Options(self.prefix).getString(key, default="")
-        no_valid_options = lambda key_expected_dict: not(all(not get_option(key) or get_option(key) in expected
-                                                             for key, expected in key_expected_dict.items()))
 
         # Get options for Schur complement decomposition
-        if no_valid_options({"ksp_type": ["preonly"], "pc_type": ["fieldsplit"], "fieldsplit_type": ["schur"]}):
-            raise ValueError("The options for the local solve in the hybridization preconditioner are not set correctly.")
+        self._check_options([("ksp_type", {"preonly"}), ("pc_type", {"fieldsplit"}), ("pc_fieldsplit_type", {"schur"})])
         self.nested = (get_option("ksp_type") == "preonly"
                        and get_option("pc_type") == "fieldsplit"
-                       and get_option("fieldsplit_type") == "schur")
+                       and get_option("pc_fieldsplit_type") == "schur")
 
         # Get preconditioning options for A00
         fs0, fs1 = ("fieldsplit_"+str(idx) for idx in (self.vidx, self.pidx))
