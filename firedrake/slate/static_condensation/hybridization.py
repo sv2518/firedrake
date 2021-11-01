@@ -467,7 +467,7 @@ class SchurComplementBuilder(object):
 
         'localsolve': {'ksp_type': 'preonly',
                        'pc_type': 'fieldsplit',
-                       'fieldsplit_type': 'schur',
+                       'pc_fieldsplit_type': 'schur',
                        'fieldsplit_1': {'ksp_type': 'default',
                                         'pc_type': 'python',
                                         'pc_python_type': __name__ + '.DGLaplacian'}}
@@ -481,7 +481,7 @@ class SchurComplementBuilder(object):
 
         'localsolve': {'ksp_type': 'preonly',
                         'pc_type': 'fieldsplit',
-                        'fieldsplit_type': 'schur',
+                        'pc_fieldsplit_type': 'schur',
                         'fieldsplit_1': {'ksp_type': 'default',
                                         'pc_type': 'python',
                                         'pc_python_type': __name__ + '.DGLaplacian',
@@ -498,7 +498,7 @@ class SchurComplementBuilder(object):
 
         'localsolve': {'ksp_type': 'preonly',
                        'pc_type': 'fieldsplit',
-                       'fieldsplit_type': 'schur',
+                       'pc_fieldsplit_type': 'schur',
                        'fieldsplit_0': {'ksp_type': 'default',
                                         'pc_type': 'jacobi'}
 
@@ -510,11 +510,11 @@ class SchurComplementBuilder(object):
 
         'localsolve': {'ksp_type': 'preonly',
                        'pc_type': 'fieldsplit',
-                       'fieldsplit_type': 'None',
+                       'pc_fieldsplit_type': 'None',
                        'fieldsplit_0':  ...
                        'fieldsplit_1':  ...
 
-    All the options for ``fieldsplit_`` are still valid if ``'fieldsplit_type': 'None'.`` In this case
+    All the options for ``fieldsplit_`` are still valid if ``'pc_fieldsplit_type': 'None'.`` In this case
     the mixed matrix inverse which appears inside the Schur complement of the trace system solve
     is calculated explicitly, but the local inverses of :math:`A_{00}` and the Schur complement
     in the reconstructions calls are still treated according to the options in ``fieldsplit_``.
