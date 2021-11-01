@@ -144,7 +144,7 @@ def test_slate_hybridization_wrong_option():
                                 'pc_type': 'lu',
                                 'localsolve': {'ksp_type': 'preonly',
                                                'pc_type': 'fieldsplit',
-                                               'fieldsplit_type': 'frog'}}}
+                                               'pc_fieldsplit_type': 'frog'}}}
     eq = a == L
     problem = LinearVariationalProblem(eq.lhs, eq.rhs, w)
     solver = LinearVariationalSolver(problem, solver_parameters=params)
@@ -261,7 +261,7 @@ def test_mixed_poisson_approximated_schur():
                                 'mat_type': 'matfree',
                                 'localsolve': {'ksp_type': 'preonly',
                                                'pc_type': 'fieldsplit',
-                                               'fieldsplit_type': 'schur',
+                                               'pc_fieldsplit_type': 'schur',
                                                'fieldsplit_1': {'ksp_type': 'default',
                                                                 'pc_type': 'python',
                                                                 'pc_python_type': __name__ + '.DGLaplacian'}}}}
@@ -327,7 +327,7 @@ def test_slate_hybridization_jacobi_prec_A00():
                                 'mat_type': 'matfree',
                                 'localsolve': {'ksp_type': 'preonly',
                                                'pc_type': 'fieldsplit',
-                                               'fieldsplit_type': 'schur',
+                                               'pc_fieldsplit_type': 'schur',
                                                'fieldsplit_0': {'ksp_type': 'default',
                                                                 'pc_type': 'jacobi'}}}}
     eq = a == L
@@ -392,7 +392,7 @@ def test_slate_hybridization_jacobi_prec_schur():
                                 'mat_type': 'matfree',
                                 'localsolve': {'ksp_type': 'preonly',
                                                'pc_type': 'fieldsplit',
-                                               'fieldsplit_type': 'schur',
+                                               'pc_fieldsplit_type': 'schur',
                                                'fieldsplit_1': {'ksp_type': 'default',
                                                                 'pc_type': 'jacobi'}}}}
     eq = a == L
@@ -453,7 +453,7 @@ def test_mixed_poisson_approximated_schur_jacobi_prec():
                                 'mat_type': 'matfree',
                                 'localsolve': {'ksp_type': 'preonly',
                                                'pc_type': 'fieldsplit',
-                                               'fieldsplit_type': 'schur',
+                                               'pc_fieldsplit_type': 'schur',
                                                'fieldsplit_1': {'ksp_type': 'default',
                                                                 'pc_type': 'python',
                                                                 'pc_python_type': __name__ + '.DGLaplacian',
