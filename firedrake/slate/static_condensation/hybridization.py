@@ -587,8 +587,8 @@ class SchurComplementBuilder(object):
         self.jacobi_Shat = get_option(fs1+"_aux_pc_type") == "jacobi"
 
         if self.jacobi_Shat or self.jacobi_A00:
-            assert parameters["slate_compiler"]["optimise"], ("Local systems should only get preconditioned with"
-                                                              "a preconditioning matrix if the Slate optimiser replaces"
+            assert parameters["slate_compiler"]["optimise"], ("Local systems should only get preconditioned with "
+                                                              "a preconditioning matrix if the Slate optimiser replaces "
                                                               "inverses by solves.")
 
     def build_inner_S(self):
