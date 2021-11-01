@@ -456,7 +456,7 @@ class SchurComplementBuilder(object):
 
         {'localsolve': {'ksp_type': 'preonly',
                         'pc_type': 'fieldsplit',
-                        'fieldsplit_type': 'schur'}}
+                        'pc_fieldsplit_type': 'schur'}}
 
     A Schur complement is requested for the mixed matrix inverse which appears inside the
     Schur complement of the trace system solve. The Schur complements are then nested.
