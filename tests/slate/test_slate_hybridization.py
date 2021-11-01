@@ -68,8 +68,8 @@ def setup_poisson_3D():
     x, y, z = SpatialCoordinate(mesh)
     expr = (1+12*pi*pi)*cos(100*pi*x)*cos(100*pi*y)*cos(100*pi*z)
     f.interpolate(expr)
-    a = (dot(sigma, tau) + div(tau)*u + div(sigma)*v)*dx(degree=31)
-    L = -f*v*dx(degree=31)
+    a = (dot(sigma, tau) + div(tau)*u + div(sigma)*v)*dx(degree=8)
+    L = -f*v*dx(degree=8)
     return a, L, W
 
 
