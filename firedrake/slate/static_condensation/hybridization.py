@@ -573,23 +573,20 @@ class SchurComplementBuilder(object):
 
         # Get preconditioning options for A00
         fs0, fs1 = ("fieldsplit_"+str(idx) for idx in (self.vidx, self.pidx))
-        if no_valid_options({fs0+"ksp_type": ["preonly", "default"], fs0+"pc_type": ["jacobi"]}):
-            raise ValueError("The options for the local solve in the hybridization preconditioner are not set correctly.")
+        self._check_options([(fs0+"ksp_type", {"preonly", "default"}), (fs0+"pc_type", {"jacobi"})])
         self.preonly_A00 = get_option(fs0+"_ksp_type") == "preonly"
         self.jacobi_A00 = get_option(fs0+"_pc_type") == "jacobi"
 
         # Get preconditioning options for the Schur complement
-        if no_valid_options({fs1+"ksp_type": ["preonly", "default"], fs1+"pc_type": ["jacobi", "python"]}):
-            raise ValueError("The options for the local solve in the hybridization preconditioner are not set correctly.")
+        self._check_options([(fs1+"ksp_type", {"preonly", "default"}), (fs1+"pc_type", {"jacobi", "python"})])
         self.preonly_S = get_option(fs1+"_ksp_type") == "preonly"
         self.jacobi_S = get_option(fs1+"_pc_type") == "jacobi"
 
         # Get user supplied operator and its options
-        self.schur_approx = (self._retrieve_user_S_approx(pc, get_option(fs1+"_pc_python_type"))
+        self.schur_approx = (self.retrieve_user_S_approx(pc, get_option(fs1+"_pc_python_type"))
                              if get_option(fs1+"_pc_type") == "python"
                              else None)
-        if no_valid_options({fs1+"aux_ksp_type": ["preonly", "default"], fs1+"aux_pc_type": ["jacobi"]}):
-            raise ValueError("The options for the local solve in the hybridization preconditioner are not set correctly.")
+        self._check_options([(fs1+"aux_ksp_type", {"preonly", "default"}), (fs1+"aux_pc_type", {"jacobi"})])
         self.preonly_Shat = get_option(fs1+"_aux_ksp_type") == "preonly"
         self.jacobi_Shat = get_option(fs1+"_aux_pc_type") == "jacobi"
 
