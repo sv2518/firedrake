@@ -164,7 +164,7 @@ def test_slate_hybridization_nested_schur():
                                 'pc_type': 'lu',
                                 'localsolve': {'ksp_type': 'preonly',
                                                'pc_type': 'fieldsplit',
-                                               'fieldsplit_type': 'schur'}}}
+                                               'pc_fieldsplit_type': 'schur'}}}
 
     eq = a == L
     problem = LinearVariationalProblem(eq.lhs, eq.rhs, w)
