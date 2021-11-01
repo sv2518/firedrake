@@ -244,7 +244,7 @@ def test_mixed_poisson_approximated_schur():
 
     NOTE: With the setup in this test, using the approximated schur complemement
     defined as DGLaplacian as a preconditioner to the schur complement,
-    reduces the condition number of the local solve from 16.77 to 5.95.
+    reduces the condition number of the local solve from 16.77 to 6.06.
     """
     # setup FEM
     a, L, W = setup_poisson()
