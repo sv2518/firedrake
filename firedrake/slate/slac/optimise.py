@@ -69,7 +69,8 @@ def _push_block(expr, self, indices):
 @_push_block.register(Transpose)
 def _push_block_transpose(expr, self, indices):
     """Indices of the Blocks are transposed if Block is pushed into a Transpose."""
-    return Transpose(*map(self, expr.children, repeat(indices[::-1]))) if indices else expr
+    return (Transpose(*map(self, expr.children, repeat(indices[::-1])))
+            if indices else Transpose(*map(self, expr.children, repeat(indices))))
 
 
 @_push_block.register(Add)
