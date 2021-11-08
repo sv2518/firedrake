@@ -250,27 +250,26 @@ class HybridizationPC(SCBase):
 
         self.schur_rhs = Function(TraceSpace)
         if local_matfree:
-            self.ctx.fc_params.update({"slate_compiler":{"optimise": False, "replace_mul": False}})
+            self.ctx.fc_params.update({"slate_compiler": {"optimise": True, "replace_mul": True}})
         else:
-            self.ctx.fc_params.update({"slate_compiler":{"optimise": False, "replace_mul": False}})
+            self.ctx.fc_params.update({"slate_compiler": {"optimise": True, "replace_mul": False}})
         self._assemble_Srhs = functools.partial(assemble,
                                                 schur_rhs,
                                                 tensor=self.schur_rhs,
-                                                form_compiler_parameters=self.ctx.fc_params) # this triggers loopy compilation
+                                                form_compiler_parameters=self.ctx.fc_params)
         mat_type = PETSc.Options().getString(prefix + "mat_type", "aij")
-        
-        # plot_mixed_operator(schur_comp, "schur_comp")
 
         self.S = allocate_matrix(schur_comp, bcs=trace_bcs,
                                  form_compiler_parameters=self.ctx.fc_params,
                                  mat_type=mat_type,
                                  options_prefix=prefix,
-                                 appctx=self.get_appctx(pc)) # this generates an ImplicitMatrix and assembles action and actionT
-        self._assemble_S = functools.partial(assemble, schur_comp,
-                                                    tensor=self.S,
-                                                    bcs=trace_bcs,
-                                                    form_compiler_parameters=self.ctx.fc_params,
-                                                    mat_type=mat_type) 
+                                 appctx=self.get_appctx(pc))
+        self._assemble_S = functools.partial(assemble,
+                                             schur_comp,
+                                             tensor=self.S,
+                                             bcs=trace_bcs,
+                                             form_compiler_parameters=self.ctx.fc_params,
+                                             mat_type=mat_type)
 
         with PETSc.Log.Event("HybridOperatorAssembly"):
             self._assemble_S()
@@ -371,7 +370,8 @@ class HybridizationPC(SCBase):
                                             assembly_type="residual")
 
         sigma_rec = A.solve(g - B * AssembledVector(u) - K_0.T * lambdar,
-                                matfree=local_matfree)
+                            decomposition="PartialPivLU",
+                            matfree=local_matfree)
         self._elim_unknown = functools.partial(assemble,
                                                 sigma_rec,
                                                 tensor=sigma,
