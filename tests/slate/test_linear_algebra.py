@@ -116,3 +116,38 @@ def test_local_solve(decomp):
     x = assemble(A.solve(b, decomposition=decomp))
 
     assert np.allclose(x.dat.data, f.dat.data, rtol=1.e-13)
+
+
+def test_transpose():
+    mesh = UnitSquareMesh(2, 2, True)
+    p1 = VectorElement("CG", triangle, 2)
+    p0 = FiniteElement("CG", triangle, 1)
+    p1p0 = MixedElement([p1, p0])
+
+    velo = FunctionSpace(mesh, p1)
+    pres = FunctionSpace(mesh, p0)
+    mixed = FunctionSpace(mesh, p1p0)
+
+    w = Function(mixed)
+    x = SpatialCoordinate(mesh)
+    velo = Function(velo).project(as_vector([10*sin(pi*x[0]), 0]))
+    w.sub(0).assign(velo)
+    pres = Function(pres).assign(10.)
+    w.sub(1).assign(pres)
+
+    dg = FunctionSpace(mesh, "DG", 2)
+    T = TrialFunction(dg)
+    v = TestFunction(dg)
+
+    n = FacetNormal(mesh)
+    u = split(w)[0]
+    un = abs(dot(u('+'), n('+')))
+    jump_v = v('+')*n('+') + v('-')*n('-')
+    jump_T = T('+')*n('+') + T('-')*n('-')
+    x, y = SpatialCoordinate(mesh)
+
+    T = Tensor(-dot(u*T, grad(v))*dx + (dot(u('+'), jump_v)*avg(T))*dS + dot(v, dot(u, n)*T)*ds + 0.5*un*dot(jump_T, jump_v)*dS)
+    assert T != T.T
+    assert isinstance(T.T, Tensor)
+    assert np.allclose(assemble(T.T).M.values,
+                       assemble(adjoint(T.form)).M.values)

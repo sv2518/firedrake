@@ -19,6 +19,7 @@ from abc import ABCMeta, abstractproperty, abstractmethod
 from collections import OrderedDict
 
 from ufl import Coefficient, Constant
+from firedrake.ufl_expr import adjoint
 
 from firedrake.function import Function
 from firedrake.utils import cached_property
@@ -1023,6 +1024,11 @@ class Inverse(UnaryOp):
 
 class Transpose(UnaryOp):
     """An abstract Slate class representing the transpose of a tensor."""
+
+    def __new__(cls, A):
+        if A.terminal and A.rank > 1:
+            return Tensor(adjoint(A.form))
+        return super().__new__(cls)
 
     @cached_property
     def arg_function_spaces(self):
