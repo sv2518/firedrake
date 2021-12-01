@@ -647,7 +647,7 @@ class LocalLoopyKernelBuilder(object):
         expr = expr if expr else self.expression
         coeffs = expr.coefficients(artificial=artificial)  #FXIME form updating to master
         coeff_dict = OrderedDict()
-        new_coeff_dict = OrderedDict()
+        action_coeff_dict = OrderedDict()
 
         # TODO is there are better way to do this?
         for i, (c, split_map) in enumerate(self.expression.coeff_map):
@@ -671,10 +671,10 @@ class LocalLoopyKernelBuilder(object):
             else:
                 info = (prefix, self.extent(coeff))
             if new:
-                new_coeff_dict[c] = info
+                action_coeff_dict[c] = info
             else:
                 coeff_dict[c] = info
-        return coeff_dict, new_coeff_dict
+        return coeff_dict, action_coeff_dict
 
     def initialise_terminals(self, var2tensor, coefficients):
         """ Initilisation of the variables in which coefficients
