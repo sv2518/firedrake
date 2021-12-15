@@ -204,14 +204,14 @@ def _slate2gem_block(expr, self):
 
 @_slate2gem.register(sl.DiagonalTensor)
 def _slate2gem_diagonal(expr, self):
-    if not self.matfree:
+    if not self.matfree or expr.terminal:
         A, = map(self, expr.children)
         assert A.shape[0] == A.shape[1]
         i, j = (Index(extent=s) for s in A.shape)
         return ComponentTensor(Product(Indexed(A, (i, i)), Delta(i, j)), (i, j))
     else:
-        raise NotImplementedError("Diagonals on Slate expressions are \
-                                   not implemented in a matrix-free manner yet.")
+        raise NotImplementedError("Diagonals on non-terminal Slate expressions are \
+                                      not implemented in a matrix-free manner yet.")
 
 
 @_slate2gem.register(sl.Inverse)
@@ -250,7 +250,7 @@ def _slate2gem_solve(expr, self):
         assert expr not in self.gem2slate.values()
         children = list(map(self, expr.children))
         ctx = {'matfree': expr.matfree, 'Aonx': self(expr.Aonx),'Aonp': self(expr.Aonp),
-               'preconditioner'=self(expr.preconditioner),
+               'preconditioner'=self(expr.preconditioner) if expr.preconditioner else None,
                'rtol': expr.rtol, 'atol': expr.atol}
         var = Solve(*children, ctx=MatfreeSolveContext(**ctx))
         self.gem2slate[var.name] = expr
