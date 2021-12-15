@@ -353,6 +353,11 @@ def _push_mul_inverse(expr, self, state):
         # Don't optimise further so that the translation to gem at a later can just spill ]1/a_ii[
         return expr * state.coeff if state.pick_op else state.coeff * expr
     else:
+        if isinstance(child, Mul):
+            expr.preconditioner, mat = child.children
+            assert state.pick_op == 1
+        else:
+            expr.preconditioner = None
         expr = (Solve(child, state.coeff, **expr.ctx) if state.pick_op
                 else Transpose(Solve(Transpose(child), Transpose(state.coeff), **expr.ctx)))
         # sometimes the solve constructor returns inverses (when the tensors are small enough)
@@ -421,10 +426,11 @@ def _push_mul_solve(expr, self, state):
         rhs = expr.children[flip(state.pick_op)]
         Aonx = make_action(expr.children[state.pick_op], state.pick_op, self.action)
         Aonp = make_action(expr.children[state.pick_op], state.pick_op, self.action)
+        Ponr = make_action(expr.preconditioner, state.pick_op, self.action) if expr.preconditioner else None
 
         swapped_op = Transpose(rhs)
         new_rhs = Transpose(state.coeff)
-        pushed_child = self(Solve(mat, new_rhs, matfree=self.action, Aonx=Aonx, Aonp=Aonp, rtol=expr.rtol, atol=expr.atol),
+        pushed_child = self(Solve(mat, new_rhs, matfree=self.action, Aonx=Aonx, Aonp=Aonp, preconditioner=Ponr, rtol=expr.rtol, atol=expr.atol),
                             ActionBag(None, flip(state.pick_op)))
         return Transpose(self(swapped_op, ActionBag(pushed_child, flip(state.pick_op))))
     else:
@@ -438,7 +444,8 @@ def _push_mul_solve(expr, self, state):
         mat, rhs = expr.children
         Aonx = make_action(mat, state.pick_op, self.action)
         Aonp = make_action(mat, state.pick_op, self.action)
-        return Solve(mat, self(self(rhs, state), state), matfree=self.action, Aonx=Aonx, Aonp=Aonp, rtol=expr.rtol, atol=expr.atol)
+        Ponr = make_action(expr.preconditioner, state.pick_op, self.action) if expr.preconditioner else None
+        return Solve(mat, self(self(rhs, state), state), matfree=self.action, Aonx=Aonx, Aonp=Aonp, preconditioner=Ponr, rtol=expr.rtol, atol=expr.atol)
 
 
 @_push_mul.register(Mul)
