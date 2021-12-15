@@ -250,6 +250,7 @@ def _slate2gem_solve(expr, self):
         assert expr not in self.gem2slate.values()
         children = list(map(self, expr.children))
         ctx = {'matfree': expr.matfree, 'Aonx': self(expr.Aonx),'Aonp': self(expr.Aonp),
+               'preconditioner'=self(expr.preconditioner),
                'rtol': expr.rtol, 'atol': expr.atol}
         var = Solve(*children, ctx=MatfreeSolveContext(**ctx))
         self.gem2slate[var.name] = expr
