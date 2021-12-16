@@ -430,7 +430,8 @@ def _push_mul_solve(expr, self, state):
 
         swapped_op = Transpose(rhs)
         new_rhs = Transpose(state.coeff)
-        pushed_child = self(Solve(mat, new_rhs, matfree=self.action, Aonx=Aonx, Aonp=Aonp, preconditioner=Ponr, rtol=expr.rtol, atol=expr.atol),
+        pushed_child = self(Solve(mat, new_rhs, matfree=self.action, Aonx=Aonx, Aonp=Aonp,
+                                  preconditioner=expr.preconditioner, Ponr=Ponr, rtol=expr.rtol, atol=expr.atol),
                             ActionBag(None, flip(state.pick_op)))
         return Transpose(self(swapped_op, ActionBag(pushed_child, flip(state.pick_op))))
     else:
@@ -445,7 +446,8 @@ def _push_mul_solve(expr, self, state):
         Aonx = make_action(mat, state.pick_op, self.action)
         Aonp = make_action(mat, state.pick_op, self.action)
         Ponr = make_action(expr.preconditioner, state.pick_op, self.action) if expr.preconditioner else None
-        return Solve(mat, self(self(rhs, state), state), matfree=self.action, Aonx=Aonx, Aonp=Aonp, preconditioner=Ponr, rtol=expr.rtol, atol=expr.atol)
+        return Solve(mat, self(self(rhs, state), state), matfree=self.action, Aonx=Aonx, Aonp=Aonp,
+                               preconditioner=expr.preconditioner, Ponr=Ponr, rtol=expr.rtol, atol=expr.atol)
 
 
 @_push_mul.register(Mul)

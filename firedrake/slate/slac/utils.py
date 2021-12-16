@@ -248,9 +248,18 @@ def _slate2gem_action(expr, self):
 def _slate2gem_solve(expr, self):
     if expr.matfree:
         assert expr not in self.gem2slate.values()
+        if expr.preconditioner:
+            assert isinstance(expr.preconditioner, sl.Inverse), "Preconditioner has to be an inverse"
+            assert expr.preconditioner not in self.gem2slate.values()
+            shape = expr.preconditioner.shape if not len(expr.preconditioner.shape) == 0 else (1, )
+            prec = Variable(None, shape)
+            self.gem2slate[prec] = expr
+        else:
+            prec = None
         children = list(map(self, expr.children))
         ctx = {'matfree': expr.matfree, 'Aonx': self(expr.Aonx),'Aonp': self(expr.Aonp),
                'preconditioner'=self(expr.preconditioner) if expr.preconditioner else None,
+               'Ponr': self(expr.Ponr) if prec else None,
                'rtol': expr.rtol, 'atol': expr.atol}
         var = Solve(*children, ctx=MatfreeSolveContext(**ctx))
         self.gem2slate[var.name] = expr
