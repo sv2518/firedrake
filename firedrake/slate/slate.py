@@ -207,7 +207,6 @@ class TensorBase(object, metaclass=ABCMeta):
     def coefficients(self, artificial=False):
         """Returns a tuple of coefficients associated with the tensor."""
 
-    @property
     def coeff_map(self):
         """A map from local coefficient numbers
         to the split global coefficient numbers.
@@ -1007,8 +1006,8 @@ class Inverse(UnaryOp):
         self.rtol = rtol
         self.atol = atol
 
-        if A.shape > (4, 4) and not isinstance(A, Factorization) and not self.diagonal:
-            A = Factorization(A, decomposition="PartialPivLU")
+        # if A.shape > (4, 4) and not isinstance(A, Factorization) and not self.diagonal:
+        #     A = Factorization(A, decomposition="PartialPivLU")
 
         super(Inverse, self).__init__(A)
 
@@ -1432,8 +1431,8 @@ class Solve(BinaryOp):
             self.preconditioner = TensorShell(self.preconditioner)
 
         # Create a matrix factorization
-        A_factored = (Factorization(A, decomposition=self.decomposition)
-                      if not A.diagonal and not self.matfree else A)
+        A_factored = A #(Factorization(A, decomposition=self.decomposition)
+                      #if not A.diagonal and not self.matfree else A)
 
         super(Solve, self).__init__(A_factored, B)
 
@@ -1474,8 +1473,22 @@ class Solve(BinaryOp):
         """Returns the expected coefficients of the resulting tensor."""
         coeffs = [op.coefficients(artificial) for op in self.operands]
         if artificial:
-            coeffs.append([op.coefficients(artificial)[0] for op in [self.Aonx, self.Aonp]])
+            coeffs.append([op.coefficients(artificial)[0] for op in [self.Aonx, self.Aonp, self.Ponr]])
         return tuple(OrderedDict.fromkeys(chain(*coeffs)))
+
+    def coeff_map(self, new_coeffs=None):
+        """A map from local coefficient numbers
+        to the split global coefficient numbers.
+        The split coefficients are defined on the pieces of the originally mixed function spaces.
+        """
+        c = new_coeffs if new_coeffs else self.coefficients()
+        ret = ()
+        for n, c in enumerate(c):
+            try:
+                ret += ((n, tuple(range(len(c.split())))),)
+            except:
+                ret += ((n, (0,)),)
+        return ret
 
     @cached_property
     def _key(self):
