@@ -305,14 +305,14 @@ class DGLaplacian(AuxiliaryOperatorPC):
     def form(self, pc, u, v):
         W = u.function_space()
         n = FacetNormal(W.mesh())
-        alpha = Constant(3**2)
-        gamma = Constant(4**2)
+        alpha = Constant(8)
+        gamma = Constant(16)
         h = CellVolume(W.mesh())/FacetArea(W.mesh())
         h_avg = (h('+') + h('-'))/2
         a_dg = -(inner(grad(u), grad(v))*dx
-                #  - inner(jump(u, n), avg(grad(v)))*dS
-                #  - inner(avg(grad(u)), jump(v, n), )*dS
-                #  + alpha/h_avg * inner(jump(u, n), jump(v, n))*dS
+                 - inner(jump(u, n), avg(grad(v)))*dS
+                 - inner(avg(grad(u)), jump(v, n), )*dS
+                 + alpha/h_avg * inner(jump(u, n), jump(v, n))*dS
                  - inner(u*n, grad(v))*ds
                  - inner(grad(u), v*n)*ds
                  + (gamma/h)*inner(u, v)*ds)
@@ -321,9 +321,9 @@ class DGLaplacian(AuxiliaryOperatorPC):
 
 
 def test_preconditioning_like():
-    mymesh = UnitSquareMesh(1, 1, quadrilateral=True)
-    RTe = FiniteElement("RTCF", quadrilateral, 3, variant="fdm")
-    DQe = FiniteElement("DQ", quadrilateral, 2, variant="fdm")
+    mymesh = UnitSquareMesh(2, 2, quadrilateral=True)
+    RTe = FiniteElement("RTCF", quadrilateral, 3)
+    DQe = FiniteElement("DQ", quadrilateral, 2)
     U = FunctionSpace(mymesh, RTe)
     V = FunctionSpace(mymesh, DQe)
     W = U * V
@@ -396,6 +396,9 @@ def test_preconditioning_like():
     P = Tensor(b)
     _, arg = A.arguments()
     C = AssembledVector(Function(arg.function_space()).assign(Constant(2.)))
+    from firedrake.slate.slac.utils import local_operator_plot_and_print_info
+    local_operator_plot_and_print_info(P, "Laplacian")
+    local_operator_plot_and_print_info(A, "Schur complement")
     # matfree_schur = assemble((P.inv*A).inv*(P.inv*C), form_compiler_parameters={"slate_compiler": {"optimise": True, "replace_mul": True, "visual_debug": False}})
     # schur = assemble((P.inv*A).inv*(P.inv*C), form_compiler_parameters={"slate_compiler": {"optimise": False, "replace_mul": False, "visual_debug": False}})
     # assert np.allclose(matfree_schur.dat.data, schur.dat.data, rtol=1.e-6)
