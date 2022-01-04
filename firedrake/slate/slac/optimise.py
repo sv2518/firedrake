@@ -89,6 +89,7 @@ def _push_block_shell(expr, self, indices):
     # maybe we don't ever get into that state, should be asserted earlier
     return self(child, indices) if child.terminal else type(expr)(self(child, indices))
 
+
 @_push_block.register(DiagonalTensor)
 def _push_block_diag(expr, self, indices):
     """Distributes Blocks for these nodes"""
@@ -107,10 +108,11 @@ def _push_block_stop(expr, self, indices):
 @_push_block.register(Solve)
 def _push_block_solve(expr, self, indices):
     """Blocks cannot be pushed further into this set of nodes."""
-    expr = type(expr)(*map(self, expr.children, repeat(tuple())), matfree=expr.matfree,
-                           Aonx=expr.Aonx, Aonp=expr.Aonp,
-                           preconditioner=expr.preconditioner, Ponr=expr.Ponr,
-                           diag_prec=expr.diag_prec)
+    expr = type(expr)(*map(self, expr.children, repeat(tuple())),
+                      matfree=expr.matfree,
+                      Aonx=expr.Aonx, Aonp=expr.Aonp,
+                      preconditioner=expr.preconditioner, Ponr=expr.Ponr,
+                      diag_prec=expr.diag_prec)
     return Block(expr, indices) if indices else expr
 
 
@@ -295,10 +297,12 @@ def _drop_double_transpose_action(expr, self):
 
 @_drop_double_transpose.register(Solve)
 def _drop_double_transpose_solve(expr, self):
-    return type(expr)(*map(self, expr.children), matfree=expr.matfree,
-                           Aonx=expr.Aonx, Aonp=expr.Aonp,
-                           preconditioner=expr.preconditioner, Ponr=expr.Ponr,
-                           diag_prec=expr.diag_prec)
+    return type(expr)(*map(self, expr.children),
+                      matfree=expr.matfree,
+                      Aonx=expr.Aonx, Aonp=expr.Aonp,
+                      preconditioner=expr.preconditioner, Ponr=expr.Ponr,
+                      diag_prec=expr.diag_prec)
+
 
 @_drop_double_transpose.register(DiagonalTensor)
 def _drop_double_transpose_diag(expr, self):
@@ -361,10 +365,11 @@ def _push_mul_inverse(expr, self, state):
                 if self.action and child.children[0].terminal and False
                 else expr * state.coeff if state.pick_op else state.coeff * expr)
     else:
-        if (self.action and state.coeff                                              # in matrix-free mode
-            and isinstance(child, Mul)                                               # when lhs == P.inv * A * x  
-            and (isinstance(state.coeff, Mul) or isinstance(state.coeff, Action))):  # and rhs == P.inv * b 
-            # turn the inverse into a preconditioned matrix-free solve    
+        # in matrix-free mode lhs == P.inv * A * x and rhs == P.inv * b
+        if self.action and state.coeff \
+           and isinstance(child, Mul) \
+           and (isinstance(state.coeff, Mul) or isinstance(state.coeff, Action)):
+            # turn the inverse into a preconditioned matrix-free solve
             assert state.pick_op == 1, "This case is not considered in the optimiser yet."
             preconditioner_l, mat = child.children
             preconditioner_r, coeff = state.coeff.children
@@ -468,8 +473,9 @@ def _push_mul_solve(expr, self, state):
             Ponr = make_action(expr.preconditioner, Ponr_pickop, self.action)
         else:
             Ponr = None
-        return Solve(mat, self(self(rhs, state), state), matfree=self.action, Aonx=Aonx, Aonp=Aonp,
-                               preconditioner=expr.preconditioner, Ponr=Ponr)
+        return Solve(mat, self(self(rhs, state), state), matfree=self.action,
+                     Aonx=Aonx, Aonp=Aonp,
+                     preconditioner=expr.preconditioner, Ponr=Ponr)
 
 
 @_push_mul.register(Mul)
