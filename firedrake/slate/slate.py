@@ -1272,7 +1272,7 @@ class Action(BinaryOp):
         )
 
         return super().__new__(cls)
-    
+
     def __init__(self, A, b, pick_op):
         super(Action, self).__init__(A, b)
 
@@ -1468,16 +1468,14 @@ class Solve(BinaryOp):
 
         self.diag_prec = self.preconditioner.diagonal if self.preconditioner else None
         # wrap preconditioner into a shell when its not terminal
-        if (self.preconditioner
-            and not self.preconditioner.terminal
-            # and not self.diag_prec
-            and not isinstance(self.preconditioner, TensorShell)):
+        if self.preconditioner and not self.preconditioner.terminal \
+           and not isinstance(self.preconditioner, TensorShell):
             self.preconditioner = TensorShell(self.preconditioner)
 
-
         # Create a matrix factorization
-        A_factored = A #(Factorization(A, decomposition=self.decomposition)
-                      #if not A.diagonal and not self.matfree else A)
+        A_factored = (Factorization(A, decomposition=self.decomposition)
+                      if not A.diagonal and not self.matfree and not self.preconditioner
+                      else A)
 
         super(Solve, self).__init__(A_factored, B)
 
