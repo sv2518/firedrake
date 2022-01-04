@@ -346,9 +346,9 @@ def test_preconditioning_like():
                                         'ksp_rtol': 1e-8,
                                         'mat_type': 'matfree',
                                         'localsolve': {'ksp_type': 'preonly',
-                                                        'pc_type': 'fieldsplit',
-                                                        'pc_fieldsplit_type': 'schur',
-                                                        'fieldsplit_1': {'ksp_type': 'default',
+                                                       'pc_type': 'fieldsplit',
+                                                       'pc_fieldsplit_type': 'schur',
+                                                       'fieldsplit_1': {'ksp_type': 'default',
                                                                         'pc_type': 'python',
                                                                         'pc_python_type': __name__ + '.DGLaplacian'}}}}
 
@@ -376,7 +376,6 @@ def test_preconditioning_like():
     matfree_schur = assemble(A * C, form_compiler_parameters={"slate_compiler": {"optimise": True, "replace_mul": True, "visual_debug": False}})
     schur = assemble(A * C, form_compiler_parameters={"slate_compiler": {"optimise": False, "replace_mul": False, "visual_debug": False}})
     assert np.allclose(matfree_schur.dat.data, schur.dat.data, rtol=1.e-6)
-
 
     # check if Srhs is garbage
     rhs, _ = builder.build_schur(builder.rhs)
@@ -408,7 +407,7 @@ def test_preconditioning_like():
     # probably because it's a bad idea to precondtion with the diagonal Laplacian
     # assert np.allclose(matfree_schur.dat.data, schur.dat.data, rtol=1.e-2)
 
-    # # check if diagonal preconditioning of mass matrix is garbage
+    # check if diagonal preconditioning of mass matrix is garbage
     # Jacobi on mass matrix works for higher order too
     P00 = DiagonalTensor(Tensor(A00.form))
     _, arg = A00.arguments()
@@ -416,4 +415,3 @@ def test_preconditioning_like():
     matfree_schur = assemble((P00.inv*A00).inv*(P00.inv*C00), form_compiler_parameters={"slate_compiler": {"optimise": True, "replace_mul": True, "visual_debug": False}})
     schur = assemble((A00).inv*(C00), form_compiler_parameters={"slate_compiler": {"optimise": False, "replace_mul": False, "visual_debug": False}})
     assert np.allclose(matfree_schur.dat.data, schur.dat.data, rtol=1.e-6)
-
