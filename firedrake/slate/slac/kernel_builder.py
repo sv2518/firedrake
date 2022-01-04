@@ -759,7 +759,7 @@ class LocalLoopyKernelBuilder(object):
         name = "mtf_solve_%d" % knl_no
         shape = expr.shape
         dtype = self.tsfc_parameters["scalar_type"]
-        preconditioned = not expr.preconditioner == None
+        preconditioned = bool(expr.preconditioner)
 
         # Generate the arguments for the kernel from the loopy expression
         args, reads, output_arg = self.generate_kernel_args_and_call_reads(expr, insn, dtype)
@@ -779,7 +779,7 @@ class LocalLoopyKernelBuilder(object):
         A_on_p = A_on_p_name
         diagonal = expr.diag_prec
         z = (ctx.gem_to_pymbolic[expr.preconditioner].name+"_r" if preconditioned and not hasattr(expr.Ponr, "name")
-            else expr.Ponr.name if preconditioned else "z")
+             else expr.Ponr.name if preconditioned else "z")
 
         # rename x and p and z in case they are already arguments
         x = "x"
@@ -808,45 +808,45 @@ class LocalLoopyKernelBuilder(object):
             """{[i_0,i_1,i_2,i_3,i_4,i_5,i_6,i_7,i_8,i_9,i_10,i_11,i_12, i_13, i_14, i_15, i_16]:
                  0<=i_0,i_1,i_2,i_3,i_4,i_5,i_7,i_8,i_9,i_10,i_11,i_12, i_13, i_14, i_15, i_16<n
                  and 0<=i_6<=3*n}""",
-            [f"""{x}[i_0] = -{b}[i_0] {{id=x0}}
-                {A_on_x}[:] = action_A({A}[:,:], {x}[:]) {{dep=x0, id=Aonx}}
-                 r[i_3] = {A_on_x}[i_3]-{b}[i_3] {{dep=Aonx, id=residual0}}
+            [f""" {x}[i_0] = -{b}[i_0] {{id=x0}}
+                  {A_on_x}[:] = action_A({A}[:,:], {x}[:]) {{dep=x0, id=Aonx}}
+                  r[i_3] = {A_on_x}[i_3]-{b}[i_3] {{dep=Aonx, id=residual0}}
              """,
              (f"""{z}[:] = action_P({P}[:,:], r[:]) {{dep=residual0, id=z0}}""" if preconditioned and not diagonal else
-             f"""{z}[:] = action_P({P}[:], r[:]){{dep=residual0, id=z0}}""" if diagonal else
-             f"""{z}[i_13] = r[i_13] {{dep=residual0, id=z0}}"""),
+              f"""{z}[:] = action_P({P}[:], r[:]){{dep=residual0, id=z0}}""" if diagonal else
+              f"""{z}[i_13] = r[i_13] {{dep=residual0, id=z0}}"""),
              f"""
-                {p}[i_4] = -{z}[i_4] {{dep=z0, id=projector0}}
-                <> rk_norm = 0. {{dep=projector0, id=rk_norm0}}
-                rk_norm = rk_norm + r[i_5]*{z}[i_5] {{dep=projector0, id=rk_norm1}}
-                for i_6
+                  {p}[i_4] = -{z}[i_4] {{dep=z0, id=projector0}}
+                  <> rk_norm = 0. {{dep=projector0, id=rk_norm0}}
+                  rk_norm = rk_norm + r[i_5]*{z}[i_5] {{dep=projector0, id=rk_norm1}}
+                  for i_6
                     {A_on_p}[:] = action_A_on_p({A}[:,:], {p}[:]) {{dep=rk_norm1, id=Aonp, inames=i_6}}
                     <> p_on_Ap = 0. {{dep=Aonp, id=ponAp0}}
                     p_on_Ap = p_on_Ap + {p}[i_2]*{A_on_p}[i_2] {{dep=ponAp0, id=ponAp}}
                     <> projector_is_zero = abs(p_on_Ap) < 1.e-16 {{id={preconverged_criterion_dep}, dep=ponAp}}
              """,
              corner_case,
-             f"""    <> alpha = rk_norm / p_on_Ap {{dep={preconverged_criterion_id}, id=alpha}}
+             f"""   <> alpha = rk_norm / p_on_Ap {{dep={preconverged_criterion_id}, id=alpha}}
                     {x}[i_7] = {x}[i_7] + alpha*{p}[i_7] {{dep=ponAp, id=xk}}
                     r[i_8] = r[i_8] + alpha*{A_on_p}[i_8] {{dep=xk,id=rk}}
-            """,
-            (f"""    {z}[i_15] = 0. {{dep=rk, id=zk0, inames=i_6}}
-                     {z}[:] = action_P({P}[:,:], r[:]) {{dep=zk0, id=zk, inames=i_6}}""" if preconditioned and not diagonal else
-            f"""     {z}[i_16] = 0. {{dep=rk, id=zk0, inames=i_6}}
-                     {z}[:] = action_P({P}[:], r[:]){{dep=zk0, id=zk, inames=i_6}}""" if diagonal else
-            f"""     {z}[i_14] = r[i_14] {{dep=rk, id=zk, inames=i_6}}"""),
-            f"""
+             """,
+             (f"""  {z}[i_15] = 0. {{dep=rk, id=zk0, inames=i_6}}
+                    {z}[:] = action_P({P}[:,:], r[:]) {{dep=zk0, id=zk, inames=i_6}}""" if preconditioned and not diagonal else
+              f"""  {z}[i_16] = 0. {{dep=rk, id=zk0, inames=i_6}}
+                    {z}[:] = action_P({P}[:], r[:]){{dep=zk0, id=zk, inames=i_6}}""" if diagonal else
+              f"""  {z}[i_14] = r[i_14] {{dep=rk, id=zk, inames=i_6}}"""),
+             f"""
                     <> rkp1_norm = 0. {{dep=zk, id=rkp1_norm0}}
                     rkp1_norm = rkp1_norm + r[i_9]*{z}[i_9] {{dep=rkp1_norm0, id={stop_criterion_dep}}}
              """,
              stop_criterion,
-             f"""   
+             f"""
                     <> beta = rkp1_norm / rk_norm {{dep={stop_criterion_id}, id=beta}}
                     rk_norm = rkp1_norm {{dep=beta, id=rk_normk}}
                     {p}[i_10] = beta * {p}[i_10] - {z}[i_10] {{dep=rk_normk, id=projectork}}
                     {A_on_p}[i_12] = 0. {{dep=projectork, id=Aonp0, inames=i_6}}
-                end
-                {output}[i_11] = {x}[i_11] {{dep=Aonp0, id=out}}
+                  end
+                  {output}[i_11] = {x}[i_11] {{dep=Aonp0, id=out}}
              """],
             [*args,
              loopy.TemporaryVariable(x, dtype, shape=shape, address_space=loopy.AddressSpace.LOCAL, target=loopy.CTarget()),
@@ -918,7 +918,7 @@ class LocalLoopyKernelBuilder(object):
     def generate_kernel_args_and_call_reads(self, expr, insn, dtype):
         """A function which is used for generating the arguments to the kernel and the read variables
            for the call to that kernel of the matrix-free solve.
-           
+
            TODO Add comment on the order of the arguments."""
         child1, child2 = expr.children
         reads = insn.expression.parameters
@@ -930,8 +930,8 @@ class LocalLoopyKernelBuilder(object):
                                target=loopy.CTarget(), dim_tags=None, strides=loopy.auto, order='C')
         if expr.preconditioner:
             arg3 = loopy.GlobalArg(reads[2].subscript.aggregate.name, dtype, shape=expr.preconditioner.shape,
-                                is_output=False, is_input=True,
-                                target=loopy.CTarget(), dim_tags=None, strides=loopy.auto, order='C')
+                                   is_output=False, is_input=True,
+                                   target=loopy.CTarget(), dim_tags=None, strides=loopy.auto, order='C')
         output_arg = loopy.GlobalArg(insn.assignee_name, dtype, shape=expr.shape, is_output=True, is_input=True,
                                      target=loopy.CTarget(), dim_tags=None, strides=loopy.auto, order='C')
 
@@ -941,7 +941,6 @@ class LocalLoopyKernelBuilder(object):
             args.insert(0, arg3)
         args.insert(0, output_arg)
         args.insert(0, arg1)
-
 
         # Generate call parameters
         reads = []
@@ -958,9 +957,9 @@ class LocalLoopyKernelBuilder(object):
         if self.bag.coords:
             coords_extent = self.extent(self.expression.ufl_domain().coordinates)
             args.append(loopy.GlobalArg(self.coordinates_arg, shape=coords_extent,
-                                    dtype=self.tsfc_parameters["scalar_type"],
-                                    dim_tags=None, strides=loopy.auto, order="C",
-                                    target=loopy.CTarget(), is_input=True, is_output=False))
+                                        dtype=self.tsfc_parameters["scalar_type"],
+                                        dim_tags=None, strides=loopy.auto, order="C",
+                                        target=loopy.CTarget(), is_input=True, is_output=False))
 
         if self.bag.needs_cell_orientations:
             ori_extent = self.extent(self.expression.ufl_domain().cell_orientations())
