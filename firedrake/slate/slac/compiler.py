@@ -25,7 +25,6 @@ from firedrake.tsfc_interface import SplitKernel, KernelInfo, TSFCKernel
 from firedrake.slate.slac.kernel_builder import LocalLoopyKernelBuilder, LocalKernelBuilder
 from firedrake.slate.slac.utils import topological_sort, slate_to_gem, merge_loopy, _AssemblyStrategy
 from firedrake.slate.slac.optimise import optimise
-from firedrake.slate.slate import Solve
 
 from firedrake import op2
 from firedrake.logging import logger
