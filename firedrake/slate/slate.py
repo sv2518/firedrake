@@ -1531,7 +1531,7 @@ class Solve(BinaryOp):
     @cached_property
     def _key(self):
         """Returns a key for hash and equality."""
-        return ((type(self), *self.operands, **self.ctx._as_dict())
+        return ((type(self), *self.operands, *self.ctx)
                 if self.matfree else (type(self), *self.operands, self.matfree))
 
     def _output_string(self, prec=None):

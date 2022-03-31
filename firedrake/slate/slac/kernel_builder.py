@@ -788,14 +788,14 @@ class LocalLoopyKernelBuilder(object):
         child1, _ = expr.children
         Aonx = getattr(expr.ctx, "Aonx")
         Aonp = getattr(expr.ctx, "Aonp")
-        Aonp = getattr(expr.ctx, "Ponr")
+        Ponr = getattr(expr.ctx, "Ponr")
         A_on_x_name = ctx.gem_to_pymbolic[child1].name+"_x" if not hasattr(Aonx, "name") else Aonx.name
         A_on_p_name = ctx.gem_to_pymbolic[child1].name+"_p" if not hasattr(Aonp, "name") else Aonp.name
         A_on_x = A_on_x_name
         A_on_p = A_on_p_name
-        diagonal = expr.diag_prec
-        z = (ctx.gem_to_pymbolic[expr.preconditioner].name+"_r" if preconditioned and not hasattr(expr.Ponr, "name")
-            else expr.Ponr.name if preconditioned else "z")
+        diagonal = getattr(expr.ctx, "diag_prec")
+        z = (ctx.gem_to_pymbolic[getattr(expr.ctx, "preconditioner")].name+"_r" if preconditioned and not hasattr(Ponr, "name")
+            else Ponr.name if preconditioned else "z")
 
         # rename x and p and z in case they are already arguments
         x = "x"
@@ -822,11 +822,7 @@ class LocalLoopyKernelBuilder(object):
 
         # NOTE The last line in the loop to convergence is another WORKAROUND
         # bc the initialisation of A_on_p in the action call does not get inlined properly either
-        knl = loopy.make_function(
-            """{[i_0,i_1,i_2,i_3,i_4,i_5,i_6,i_7,i_8,i_9,i_10,i_11,i_12, i_13, i_14, i_15]:
-                 0<=i_0,i_1,i_2,i_3,i_4,i_5,i_7,i_8,i_9,i_10,i_11,i_12, i_13, i_14, i_15<n
-                 and 0<=i_6<=n}""",
-            [f"""{x}[i_0] = -{b}[i_0] {{id=x0}}
+        insns = [f"""{x}[i_0] = -{b}[i_0] {{id=x0}}
                 {A_on_x}[:] = action_A({A}[:,:], {x}[:]) {{dep=x0, id=Aonx}}
                  r[i_3] = {A_on_x}[i_3]-{b}[i_3] {{dep=Aonx, id=residual0}}
              """,
@@ -868,8 +864,8 @@ class LocalLoopyKernelBuilder(object):
         insns, event, preamble = profile_insns(name, insns, PETSc.Log.isActive())
 
         knl = loopy.make_function(
-            """{[i_0,i_1,i_2,i_3,i_4,i_5,i_6,i_7,i_8,i_9,i_10,i_11,i_12]:
-                 0<=i_0,i_1,i_2,i_3,i_4,i_5,i_7,i_8,i_9,i_10,i_11,i_12<n
+             """{[i_0,i_1,i_2,i_3,i_4,i_5,i_6,i_7,i_8,i_9,i_10,i_11,i_12, i_13, i_14, i_15]:
+                 0<=i_0,i_1,i_2,i_3,i_4,i_5,i_7,i_8,i_9,i_10,i_11,i_12, i_13, i_14, i_15<n
                  and 0<=i_6<=n}""",
             insns,
             [*args,
@@ -879,7 +875,7 @@ class LocalLoopyKernelBuilder(object):
              loopy.TemporaryVariable(p, dtype, shape=shape, address_space=loopy.AddressSpace.LOCAL),
              loopy.TemporaryVariable(z, dtype, shape=shape, address_space=loopy.AddressSpace.LOCAL),
              loopy.TemporaryVariable(r, dtype, shape=shape, address_space=loopy.AddressSpace.LOCAL)],
-            target=loopy.CTarget(),
+            target=target,
             name=name,
             lang_version=(2018, 2),
             silenced_warnings=["single_writer_after_creation", "unused_inames"],
@@ -952,20 +948,19 @@ class LocalLoopyKernelBuilder(object):
 
         # Generate kernel args
         arg1 = loopy.GlobalArg(reads[0].subscript.aggregate.name, dtype, shape=child1.shape, is_output=False, is_input=True,
-                               target=loopy.CTarget(), dim_tags=None, strides=loopy.auto, order='C')
+                               dim_tags=None, strides=loopy.auto, order='C')
         arg2 = loopy.GlobalArg(reads[1].subscript.aggregate.name, dtype, shape=child2.shape, is_output=False, is_input=True,
-                               target=loopy.CTarget(), dim_tags=None, strides=loopy.auto, order='C')
-        if expr.preconditioner:
-            arg3 = loopy.GlobalArg(reads[2].subscript.aggregate.name, dtype, shape=expr.preconditioner.shape,
-                                is_output=False, is_input=True,
-                                target=loopy.CTarget(), dim_tags=None, strides=loopy.auto, order='C')
+                               dim_tags=None, strides=loopy.auto, order='C')
+        if getattr(expr.ctx, "preconditioner"):
+            arg3 = loopy.GlobalArg(reads[2].subscript.aggregate.name, dtype, shape=getattr(expr.ctx, "preconditioner").shape,
+                                is_output=False, is_input=True, dim_tags=None, strides=loopy.auto, order='C')
         output_arg = loopy.GlobalArg(insn.assignee_name, dtype, shape=expr.shape, is_output=True, is_input=True,
                                      dim_tags=None, strides=loopy.auto, order='C')
 
         not_loopy_args, tmp_args = self.generate_wrapper_kernel_args()
         args = [arg.loopy_arg for arg in not_loopy_args] + tmp_args
         args.append(arg2)
-        if expr.preconditioner:
+        if getattr(expr.ctx, "preconditioner"):
             args.insert(0, arg3)
         args.insert(0, output_arg)
         args.insert(0, arg1)
