@@ -272,8 +272,8 @@ class TensorBase(object, metaclass=ABCMeta):
         return any(len(fs) > 1 for fs in self.arg_function_spaces)
 
 
-    def inverse(self, rtol=None, atol=None):
-        return Inverse(self, rtol, atol)
+    def inverse(self, rtol=None, atol=None, max_it=None):
+        return Inverse(self, rtol, atol, max_it)
 
 
     @property
@@ -1051,7 +1051,7 @@ class Inverse(UnaryOp):
        This class will raise an error if the tensor is not square.
     """
 
-    def __init__(self, A, rtol=None, atol=None):
+    def __init__(self, A, rtol=None, atol=None, max_it=None):
         """Constructor for the Inverse class."""
         assert A.rank == 2, "The tensor must be rank 2."
         assert A.shape[0] == A.shape[1], (
@@ -1060,6 +1060,7 @@ class Inverse(UnaryOp):
         self.diagonal = A.diagonal
         self.rtol = rtol
         self.atol = atol
+        self.max_it = max_it
 
         # if A.shape > (4, 4) and not isinstance(A, Factorization) and not self.diagonal:
         #     A = Factorization(A, decomposition="PartialPivLU")
@@ -1088,7 +1089,7 @@ class Inverse(UnaryOp):
 
     @property
     def ctx(self):
-        return {"rtol": self.rtol, "atol":self.atol}
+        return {"rtol": self.rtol, "atol":self.atol, "max_it":self.max_it}
 
 
 class Transpose(UnaryOp):
@@ -1559,7 +1560,7 @@ class Solve(BinaryOp):
     def ctx(self):
         return {"matfree": self.matfree, "Aonx": self.Aonx, "Aonp": self.Aonp,
                 "preconditioner": self.preconditioner, "Ponr": self.Ponr, "diag_prec": self.diag_prec,
-                "rtol": self.rtol, "atol": self.atol}
+                "rtol": self.rtol, "atol": self.atol, "max_it": self.max_it}
 
     @cached_property
     def arg_function_spaces(self):
