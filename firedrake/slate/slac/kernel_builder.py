@@ -659,6 +659,8 @@ class LocalLoopyKernelBuilder(object):
         # TODO is there are better way to do this?
         for i, (c, split_map) in enumerate(self.expression.coeff_map):
             new = False
+            c = coeff.orig_function if isinstance(coeff, slate.BlockFunction) else coeff
+            count2 = 0
             try:
                 # check if the coefficient is in names,
                 # if yes it will be replaced later
@@ -668,10 +670,11 @@ class LocalLoopyKernelBuilder(object):
                 # if coefficient is not in names it is not an
                 # an action coefficient so we can use usual naming conventions
                 if not new:
-                    if c not in self.bag.coefficients:
-                        count = i+len(self.bag.coefficients)
+                    if c not in coeff_dict.keys():
+                        count = i+len(coeff_dict)
                     else:
-                        count = i
+                        count = list(coeff_dict.keys()).index(c)
+                        count2 = len(coeff_dict[c])
                     prefix = "w_{}".format(count)
             element = c.ufl_element()
             # collect information about the coefficient in particular name and extent
@@ -741,7 +744,6 @@ class LocalLoopyKernelBuilder(object):
                                                   within_inames=frozenset(inames),
                                                   within_inames_is_final=True))
                     offset += shp
-
         return inits, tensor2temp
 
     def slate_call(self, kernel, temporaries):
