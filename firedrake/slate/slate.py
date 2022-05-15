@@ -1231,23 +1231,41 @@ class Mul(BinaryOp):
 
     def __init__(self, A, B):
         """Constructor for the Mul class."""
+        print("mul")
         if A.shape[-1] != B.shape[0]:
             raise ValueError("Illegal op on a %s-tensor with a %s-tensor."
                              % (A.shape, B.shape))
 
-        fsA = A.arg_function_spaces[-1]
-        fsB = B.arg_function_spaces[0]
+        if False: #isinstance(B, BlockAssembledVector):
+            print("hi")
+            set_fsA = A.arg_function_spaces[-1].split()
+            set_fsB = B.arg_function_spaces[0]
+            print(len(set_fsA ))
+            print(len(set_fsB))
+            assert all([space_equivalence(fsA, fsB) for fsA, fsB in
+                        zip(set_fsA, set_fsB)]), (
+                "Function spaces associated with operands must match."
+            )
+        else:
+            fsA = A.arg_function_spaces[-1]
+            fsB = B.arg_function_spaces[0]
+            print(A.arg_function_spaces)
+            print(B.arg_function_spaces)
 
-        assert space_equivalence(fsA, fsB), (
-            "Cannot perform argument contraction over middle indices. "
-            "They must be in the same function space."
-        )
+            assert space_equivalence(fsA, fsB), (
+                "Cannot perform argument contraction over middle indices. "
+                "They must be in the same function space."
+            )
 
         super(Mul, self).__init__(A, B)
 
         # Function space check above ensures that middle arguments can
         # be 'eliminated'.
-        self._args = A.arguments()[:-1] + B.arguments()[1:]
+        
+        if False: #isinstance(B, BlockAssembledVector):
+            self._args = A.arguments()[:-1]
+        else:
+            self._args = A.arguments()[:-1] + B.arguments()[1:]
 
     @cached_property
     def arg_function_spaces(self):
