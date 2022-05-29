@@ -85,7 +85,7 @@ def run_CG_problem_matfree(r, degree, quads=False):
 
     params = {'snes_type': 'ksponly',
               'mat_type': 'matfree',
-            #   'pmat_type': 'matfree',
+              'pmat_type': 'matfree',
               'ksp_type': 'preonly',
               'pc_type': 'python',
               'pc_python_type': 'firedrake.SCPC',
@@ -121,7 +121,8 @@ def test_cg_convergence(degree, quads, rate):
 
 
 @pytest.mark.parametrize(('degree', 'quads', 'rate'),
-                         [(3, False, 3.75)])
+                         [(3, False, 3.75),
+                          (5, True, 5.75)])
 def test_cg_convergence_matfree(degree, quads, rate):
     import numpy as np
     diff = np.array([run_CG_problem_matfree(r, degree, quads) for r in range(2, 5)])
