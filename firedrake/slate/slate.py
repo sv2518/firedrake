@@ -1561,10 +1561,12 @@ class Solve(BinaryOp):
 
     def coefficients(self, artificial=False):
         """Returns the expected coefficients of the resulting tensor."""
-        coeffs = [self.preconditioner.coefficients(artificial)] if self.preconditioner else []
-        coeffs += [op.coefficients(artificial) for op in self.operands]
+        coeffs = [op.coefficients(artificial) for op in self.operands]
+        coeffs += [self.preconditioner.coefficients(artificial)] if self.preconditioner else []
         if artificial:
-            coeffs.append([op.coefficients(artificial)[0] for op in [self.Aonx, self.Aonp, self.Ponr]])
+            coeffs.append([op.coefficients(artificial)[0] for op in [self.Aonx, self.Aonp]])
+            if self.Ponr:
+                coeffs.append([self.Ponr.coefficients(artificial)[0]])
         return tuple(OrderedDict.fromkeys(chain(*coeffs)))
 
     @cached_property

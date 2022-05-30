@@ -442,6 +442,8 @@ def merge_loopy(slate_loopy, output_arg, builder, gem2slate, wrapper_name, ctx_g
         return slate_wrapper, tuple(kernel_args), events
 
     elif strategy == _AssemblyStrategy.WHEN_NEEDED:
+        coeffs, _ = builder.collect_coefficients(artificial=False)
+        builder.bag.copy_coefficients(coeffs)
         tensor2temp, builder, slate_loopy, kernel_args, events = assemble_when_needed(builder, gem2slate,
                                                                  slate_loopy, slate_expr,
                                                                  ctx_g2l, tsfc_parameters,
@@ -544,8 +546,15 @@ def assemble_when_needed(builder, gem2slate, slate_loopy, slate_expr, ctx_g2l, t
                 # separate action and non-action coefficients, needed because
                 # figuring out which coefficients needs to be in the kernel data
                 # is different for original coefficients and action coefficients
+                old_coeffs, _ = builder.collect_coefficients(artificial=True)
                 original_coeffs, action_coeffs = builder.collect_coefficients(expr=terminal, names=names)
-                builder.bag.copy_coefficients(original_coeffs, action_coeffs)
+                new_coeffs = {}
+                for c in original_coeffs:
+                    if c in old_coeffs:
+                        new_coeffs[c] = old_coeffs[c]
+                    else:
+                        new_coeffs[c] = original_coeffs[c]
+                builder.bag.copy_coefficients(new_coeffs, action_coeffs)
 
                 # temporaries that have calls assigned, which get inlined later,[
                 # need to be initialised, so e.g. the lhs of an action
@@ -586,6 +595,16 @@ def assemble_when_needed(builder, gem2slate, slate_loopy, slate_expr, ctx_g2l, t
                     # Prepare data structures of builder for a new swipe
                     action_wrapper_knl_name = ctx_g2l_action.kernel_name
                     action_builder = LocalLoopyKernelBuilder(slate_node, builder.tsfc_parameters, action_wrapper_knl_name)
+                    
+                    original_coeffs, _ = builder.collect_coefficients(expr=slate_node, artificial=False)
+                    old_coeffs, _ = builder.collect_coefficients()
+                    new_coeffs = {}
+                    for c in original_coeffs:
+                        if c in old_coeffs:
+                            new_coeffs[c] = old_coeffs[c]
+                        else:
+                            new_coeffs[c] = original_coeffs[c]
+                    action_builder.bag.copy_coefficients(new_coeffs, None)
 
                     # glue the action coeff to the newly generated kernel
                     # we need this because the new run through the compiler above generated new temps, also for the coefficient,
@@ -638,8 +657,15 @@ def assemble_when_needed(builder, gem2slate, slate_loopy, slate_expr, ctx_g2l, t
                             # separate action and non-action coefficients, needed because
                             # figuring out which coefficients needs to be in the kernel data
                             # is different for original coefficients and action coefficients
-                            original_coeffs, action_coeffs = builder.collect_coefficients(expr=terminal, names=names)
-                            builder.bag.copy_coefficients(original_coeffs, action_coeffs)
+                            original_coeffs, _ = builder.collect_coefficients(expr=terminal, names=names, artificial=False)
+                            old_coeffs, _ = builder.collect_coefficients(artificial=False)
+                            new_coeffs = {}
+                            for c in original_coeffs:
+                                if c in old_coeffs:
+                                    new_coeffs[c] = old_coeffs[c]
+                                else:
+                                    new_coeffs[c] = original_coeffs[c]
+                            builder.bag.copy_coefficients(new_coeffs, None)
 
                             # gem terminal node corresponding to lhs of the instructions
                             gem_inlined_node = Variable(diagT_arg.name, gem_action_node.shape)
@@ -662,20 +688,33 @@ def assemble_when_needed(builder, gem2slate, slate_loopy, slate_expr, ctx_g2l, t
                             insns += tsfc_insns
                             knl_list.update(tsfc_knls)
 
-                            builder.bag.copy_extra_args(modified_action_builder.bag)
+                            # builder.bag.copy_extra_args(modified_action_builder.bag)
                         action_builder = LocalLoopyKernelBuilder(slate_node, builder.tsfc_parameters,
                                                                  action_wrapper_knl_name, coords=False)
+                        # action_builder.bag.copy_extra_args(modified_action_builder.bag)
                 else:
                     # ----- Codepath for matrix-free solves on terminal tensors ----
+                    action_builder = LocalLoopyKernelBuilder(slate_node, builder.tsfc_parameters, None)
 
                     # Generate matfree solve call and knl
+                    oldcoeffs, _ = builder.collect_coefficients(artificial=False)
+                    original_coeffs, _ = builder.collect_coefficients(expr=slate_node, artificial=False)
+                    new_coeffs = {}
+                    for c in original_coeffs:
+                        if c in oldcoeffs:
+                            new_coeffs[c] = oldcoeffs[c]
+                        else:
+                            new_coeffs[c] = original_coeffs[c]
+                    action_builder.bag.copy_coefficients(new_coeffs, None)
+                    builder.bag.copy_coefficients(action_builder.bag.coefficients)
+
                     (action_insn, (action_wrapper_knl_name, action_wrapper_knl),
-                     action_output_arg, ctx_g2l, loopy_rhs, event) = builder.generate_matfsolve_call(ctx_g2l, insn, gem_action_node)
+                     action_output_arg, ctx_g2l, loopy_rhs, event) = action_builder.generate_matfsolve_call(ctx_g2l, insn, gem_action_node)
                     all_events += (event, )
 
                     # Prepare data structures of builder for a new swipe
                     # in particular the tensor2temp dict needs to hold the rhs of the matrix-solve in Slate and in loopy
-                    action_builder = LocalLoopyKernelBuilder(slate_node, builder.tsfc_parameters, action_wrapper_knl_name)
+                    action_builder.slate_loopy_name = action_wrapper_knl_name
                     action_tensor2temp = {slate_coeff_node: loopy_rhs}
                     gem2slate_actions = gem2slate
                     ctx_g2l_action = ctx_g2l
@@ -685,6 +724,9 @@ def assemble_when_needed(builder, gem2slate, slate_loopy, slate_expr, ctx_g2l, t
                     # the kernel builder generates the matfree solve kernel as A = ...
 
                 # Repeat for the actions which might be in the action wrapper kernel
+                print("actionbuildercoeffs", action_builder.bag.coefficients)
+                # builder.bag.copy_extra_args(action_builder.bag)
+                print("extracoeffs", action_builder.bag.coefficients)
                 _, modified_action_builder, action_wrapper_knl, kernel_args, events = assemble_when_needed(action_builder,
                                                                                       gem2slate_actions,
                                                                                       action_wrapper_knl,
@@ -778,9 +820,10 @@ def initialise_temps(builder, gem2slate, tensor2temps):
                          if (isinstance(t, sl.AssembledVector) and t._function == cv)
                          or (isinstance(t, sl.BlockAssembledVector) and cv == t._original_function)}
 
+    builder.bag.coefficients = OrderedDict(builder.bag.coefficients)
     for k, v in init_coeffs.items():
         builder.bag.coefficients[k] = v
-    # builder.bag.coefficients.update(init_coeffs)
+        builder.bag.coefficients.move_to_end(k)
 
     inits, tensor2temp = builder.initialise_terminals(gem2slate_vectors, init_coeffs)
     tensor2temps.update(tensor2temp)
@@ -870,6 +913,7 @@ def update_wrapper_kernel(builder, insns, output_arg, tensor2temps, knl_list, sl
     # Match tsfc kernel args to the wrapper kernel callinstruction args,
     # because tsfc kernels have flattened indices
     for name, knl in knl_list.items():
+        print(slate_loopy)
         slate_loopy = lp.merge([slate_loopy, knl])
         slate_loopy = _match_caller_callee_argument_dimension_(slate_loopy, name)
     return slate_loopy, tuple(kernel_args)
