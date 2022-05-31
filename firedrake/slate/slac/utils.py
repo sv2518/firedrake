@@ -586,6 +586,7 @@ def assemble_when_needed(builder, gem2slate, slate_loopy, slate_expr, ctx_g2l, t
                     # we need to compile expression within a tensor shell node to gem
                     # and then futher into a loopy kernel
                     old_slate_node = slate_node
+                    slate_node = optimise(slate_node, slate_parameters)
                     gem_action_node, gem2slate_actions = slate_to_gem(slate_node, slate_parameters)
                     (action_wrapper_knl, ctx_g2l_action, event), action_output_arg = gem_to_loopy(gem_action_node,
                                                                                            gem2slate_actions,
