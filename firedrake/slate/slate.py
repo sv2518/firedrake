@@ -1564,9 +1564,9 @@ class Solve(BinaryOp):
         coeffs = [op.coefficients(artificial) for op in self.operands]
         coeffs += [self.preconditioner.coefficients(artificial)] if self.preconditioner else []
         if artificial:
-            coeffs.append([op.coefficients(artificial)[0] for op in [self.Aonx, self.Aonp]])
+            coeffs += [op.coefficients(artificial) for op in [self.Aonx, self.Aonp]]
             if self.Ponr:
-                coeffs.append([self.Ponr.coefficients(artificial)[0]])
+                coeffs += [op.coefficients(artificial) for op in [self.Ponr]]
         return tuple(OrderedDict.fromkeys(chain(*coeffs)))
 
     @cached_property
@@ -1578,6 +1578,7 @@ class Solve(BinaryOp):
     def _output_string(self, prec=None):
         """Creates a string representation of the solve of a tensor."""
         return ("(%s).matf_solve(%s)" % self.operands
+                if self.matfree and not self.preconditioner else "(%s).matf_solve(%s, prec=%s)" % (*self.operands, self.preconditioner)
                 if self.matfree else "(%s).solve(%s)" % self.operands)
 
 
