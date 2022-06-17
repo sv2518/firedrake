@@ -652,13 +652,14 @@ class LocalLoopyKernelBuilder(object):
             the expression and artificial ones used for actions.
         """
         expr = expr if expr else self.expression
-        coeffs = expr.coefficients(artificial=artificial)  #FXIME form updating to master
+        coeffs = expr.slate_coefficients(artificial=artificial) if self.expression else expr.coefficients() #FXIME form updating to master
         coeff_dict = OrderedDict()
         action_coeff_dict = OrderedDict()
 
         # TODO is there are better way to do this?
         for i, (c, split_map) in enumerate(self.expression.coeff_map):
             new = False
+            coeff = coeffs[c]
             c = coeff.orig_function if isinstance(coeff, slate.BlockFunction) else coeff
             count2 = 0
             try:
@@ -777,7 +778,7 @@ class LocalLoopyKernelBuilder(object):
         prec = getattr(expr.ctx, "preconditioner")
         max_it = getattr(expr.ctx, "max_it")
         preconditioned = bool(prec)
-        max_it_loop = 2*shape[0]
+        max_it_loop = 10*shape[0]
 
         if max_it:
             assert int(max_it)<max_it_loop, f"The local solver is looping up to {max_it_loop}." \
